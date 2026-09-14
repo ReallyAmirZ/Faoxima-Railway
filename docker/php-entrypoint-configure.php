@@ -14,6 +14,17 @@ function env_or($name, $default = '')
     return ($value === false || $value === '') ? $default : $value;
 }
 
+function env_first(array $names, $default = '')
+{
+    foreach ($names as $name) {
+        $value = getenv($name);
+        if ($value !== false && $value !== '') {
+            return $value;
+        }
+    }
+    return $default;
+}
+
 function fetch_bot_username($token)
 {
     if ($token === '') {
@@ -32,16 +43,30 @@ function fetch_bot_username($token)
 }
 
 $botToken = env_or('TELEGRAM_BOT_TOKEN');
-$urlPath  = env_or('URL_PATH', 'faoxima');
+$railwayDomain = env_or('RAILWAY_PUBLIC_DOMAIN');
+$domain = env_or('DOMAIN', $railwayDomain);
+
+// Railway exposes the application at the domain root. Existing Docker/VPS
+// installs keep the historical /faoxima default unless URL_PATH is provided.
+$urlPathValue = getenv('URL_PATH');
+$urlPath = $urlPathValue === false
+    ? ($railwayDomain !== '' ? '' : 'faoxima')
+    : trim((string) $urlPathValue, '/');
+
+$domainAddress = preg_replace('#^https?://#i', '', trim((string) $domain));
+$domainAddress = rtrim((string) $domainAddress, '/');
+if ($urlPath !== '') {
+    $domainAddress .= '/' . $urlPath;
+}
 
 $replacements = [
-    '{database_name}' => env_or('DB_NAME'),
-    '{username_db}'   => env_or('DB_USER'),
-    '{password_db}'   => env_or('DB_PASS'),
-    '{db_host}'       => env_or('DB_HOST', 'db'),
+    '{database_name}' => env_first(['DB_NAME', 'MYSQLDATABASE']),
+    '{username_db}'   => env_first(['DB_USER', 'MYSQLUSER']),
+    '{password_db}'   => env_first(['DB_PASS', 'MYSQLPASSWORD']),
+    '{db_host}'       => env_first(['DB_HOST', 'MYSQLHOST'], 'db'),
     '{API_KEY}'       => $botToken,
     '{admin_number}'  => env_or('TELEGRAM_ADMIN_ID'),
-    '{domain_name}'   => env_or('DOMAIN') . '/' . $urlPath,
+    '{domain_name}'   => $domainAddress,
     '{username_bot}'  => fetch_bot_username($botToken),
 ];
 

@@ -20,6 +20,12 @@ RUN apt-get update \
     && (pecl install ssh2-1.3.1 && docker-php-ext-enable ssh2 || true) \
     && (pecl install redis && docker-php-ext-enable redis || true) \
     && a2enmod rewrite headers \
+    && rm -f \
+        /etc/apache2/mods-enabled/mpm_event.conf \
+        /etc/apache2/mods-enabled/mpm_event.load \
+        /etc/apache2/mods-enabled/mpm_worker.conf \
+        /etc/apache2/mods-enabled/mpm_worker.load \
+    && a2enmod mpm_prefork \
     && rm -rf /var/lib/apt/lists/* /tmp/pear
 
 ENV APACHE_DOCUMENT_ROOT=/var/www/faoxima

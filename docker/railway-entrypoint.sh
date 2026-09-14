@@ -17,6 +17,17 @@ esac
 sed -ri "s/^Listen [0-9]+/Listen ${PORT_VALUE}/" /etc/apache2/ports.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:${PORT_VALUE}>/" /etc/apache2/sites-available/000-default.conf
 
+# PHP's Apache image must use prefork. Some package combinations can leave
+# event/worker links enabled as well, which makes Apache exit with AH00534.
+rm -f \
+    /etc/apache2/mods-enabled/mpm_event.conf \
+    /etc/apache2/mods-enabled/mpm_event.load \
+    /etc/apache2/mods-enabled/mpm_worker.conf \
+    /etc/apache2/mods-enabled/mpm_worker.load
+if [ ! -e /etc/apache2/mods-enabled/mpm_prefork.load ]; then
+    a2enmod mpm_prefork >/dev/null
+fi
+
 if [ -z "${DOMAIN:-}" ] && [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
     export DOMAIN="$RAILWAY_PUBLIC_DOMAIN"
 fi

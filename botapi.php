@@ -53,8 +53,19 @@ if (!function_exists('rx_callback_lock_acquire')) {
         $name = substr($prefix . ':' . preg_replace('/[^a-z0-9_]/i', '', $scope) . ':' . $ownerId, 0, 64);
 
         try {
+            $stmt = $pdo->prepare('SELECT IS_USED_LOCK(?)');
+            $stmt->execute([$name]);
+            $heldBy = $stmt->fetchColumn();
+            if ($heldBy !== null && $heldBy !== false) {
+                $stmt = $pdo->prepare('SELECT CONNECTION_ID()');
+                $stmt->execute();
+                if ((string) $stmt->fetchColumn() === (string) $heldBy) {
+                    $pdo->prepare('SELECT RELEASE_LOCK(?)')->execute([$name]);
+                }
+            }
+
             $stmt = $pdo->prepare('SELECT GET_LOCK(?, ?)');
-            $stmt->execute([$name, $timeout]);
+            $stmt->execute([$name, max(0.1, (float) $timeout)]);
             $got = $stmt->fetchColumn();
         } catch (Throwable $e) {
             @error_log('[rx_callback_lock] acquire failed: ' . $e->getMessage());
@@ -71,15 +82,17 @@ if (!function_exists('rx_callback_lock_release')) {
         global $pdo;
 
         if (!is_string($name) || $name === '' || !($pdo instanceof PDO)) {
-            return;
+            return null;
         }
 
         try {
             $stmt = $pdo->prepare('SELECT RELEASE_LOCK(?)');
             $stmt->execute([$name]);
-            $stmt->fetchColumn();
+            $result = $stmt->fetchColumn();
+            return $result === null ? null : (string) $result;
         } catch (Throwable $e) {
             @error_log('[rx_callback_lock] release failed: ' . $e->getMessage());
+            return 'error:' . $e->getMessage();
         }
     }
 }
@@ -256,8 +269,9 @@ function telegram($method, $datas = [], $token = null)
 
     if ($rawResponse === false) {
         $logError = $curlError !== '' ? $curlError : 'Unknown cURL error';
+        $redactedUrl = preg_replace('#(/bot)[^/]+(/)#', '$1***$2', $url);
         error_log(sprintf('Telegram request failed (errno: %d, url: %s, attempts: %d): %s',
-            $curlErrorNumber, $url, $attemptedTimes, $logError));
+            $curlErrorNumber, $redactedUrl, $attemptedTimes, $logError));
         return [
             'ok' => false,
             'description' => ($curlError !== '' ? $curlError : 'Telegram request failed.') . ' اتصال به تلگرام در مهلت مقرر برقرار نشد؛ فایروال یا پراکسی خروجی را بررسی کنید.'
@@ -768,6 +782,105 @@ if (!function_exists('rx_isAdminChat')) {
             } catch (\Throwable $e) {}
         }
         return isset($adminSet[$chatId]);
+    }
+}
+
+if (!function_exists('rx_glassModeOn')) {
+    function rx_glassModeOn(): bool {
+        return isset($GLOBALS['setting']['inlinebtnmain']) && $GLOBALS['setting']['inlinebtnmain'] === 'oninline';
+    }
+}
+
+if (!function_exists('rx_autoRemoveReplyKeyboardOn')) {
+    function rx_autoRemoveReplyKeyboardOn(): bool {
+        $value = $GLOBALS['setting']['auto_remove_reply_keyboard'] ?? 'on';
+        return (string) $value !== 'off';
+    }
+}
+
+if (!function_exists('rx_flushPendingReplyKeyboardCleanup')) {
+    function rx_flushPendingReplyKeyboardCleanup($chatId): void {
+        $chatId = trim((string) $chatId);
+        if ($chatId === '' || !ctype_digit($chatId)) return;
+        if (!function_exists('select') || !function_exists('update')) return;
+
+        try {
+            $pendingId = select('user', 'reply_kb_cleanup_msg_id', 'id', $chatId, 'select', ['cache' => false]);
+            $pendingId = is_scalar($pendingId) ? (int) $pendingId : 0;
+            if ($pendingId <= 0) return;
+
+            if (function_exists('deletemessage')) {
+                deletemessage($chatId, $pendingId);
+            }
+            update('user', 'reply_kb_cleanup_msg_id', '0', 'id', $chatId);
+        } catch (Throwable $e) {
+            error_log('[rx_flushPendingReplyKeyboardCleanup] ' . $e->getMessage());
+        }
+    }
+}
+
+if (!function_exists('removeReplyKeyboardOnStartIfNeeded')) {
+    function removeReplyKeyboardOnStartIfNeeded($chatId): void {
+        $chatId = trim((string) $chatId);
+        if ($chatId === '' || !ctype_digit($chatId)) return;
+        if (!function_exists('select') || !function_exists('update')) return;
+
+        try {
+            rx_flushPendingReplyKeyboardCleanup($chatId);
+
+            if (!rx_glassModeOn()) {
+                $flag = select('user', 'reply_kb_cleared', 'id', $chatId, 'select', ['cache' => false]);
+                $flag = is_scalar($flag) ? (string) $flag : '0';
+                if ($flag === '1') {
+                    update('user', 'reply_kb_cleared', '0', 'id', $chatId);
+                }
+                return;
+            }
+
+            if (!rx_autoRemoveReplyKeyboardOn()) {
+                return;
+            }
+
+            $flag = select('user', 'reply_kb_cleared', 'id', $chatId, 'select', ['cache' => false]);
+            $flag = is_scalar($flag) ? (string) $flag : '0';
+            if ($flag === '1') {
+                return;
+            }
+
+            $rxRkrResult = telegram('sendmessage', [
+                'chat_id' => $chatId,
+                'text' => '.',
+                'reply_markup' => json_encode(['remove_keyboard' => true], JSON_UNESCAPED_UNICODE),
+                '_rx_already_transformed' => true,
+            ]);
+
+            $rxRkrOk = is_array($rxRkrResult) && !empty($rxRkrResult['ok']);
+            $rxRkrMessageId = $rxRkrOk ? (int) ($rxRkrResult['result']['message_id'] ?? 0) : 0;
+
+            if (!$rxRkrOk || $rxRkrMessageId <= 0) {
+                return;
+            }
+
+            update('user', 'reply_kb_cleared', '1', 'id', $chatId);
+
+            usleep(500000);
+
+            $rxRkrDeleteOk = false;
+            if (function_exists('deletemessage')) {
+                $rxRkrDeleteResult = deletemessage($chatId, $rxRkrMessageId);
+                $rxRkrDeleteOk = is_array($rxRkrDeleteResult) && !empty($rxRkrDeleteResult['ok']);
+            }
+
+            update('user', 'reply_kb_cleanup_msg_id', $rxRkrDeleteOk ? '0' : (string) $rxRkrMessageId, 'id', $chatId);
+        } catch (Throwable $e) {
+            error_log('[removeReplyKeyboardOnStartIfNeeded] ' . $e->getMessage());
+        }
+    }
+}
+
+if (!function_exists('removeReplyKeyboardIfNeeded')) {
+    function removeReplyKeyboardIfNeeded($chatId): void {
+        removeReplyKeyboardOnStartIfNeeded($chatId);
     }
 }
 
@@ -2481,7 +2594,36 @@ if (!function_exists('rx_cron_btn')) {
         return $btn;
     }
 }
-function prepareTelegramInputFile($input)
+function normalizeConfigFilename($filename, $prefix = '', $wireguard = false)
+{
+    $filename = basename(str_replace('\\', '/', (string) $filename));
+    $extension = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+    $stem = (string) pathinfo($filename, PATHINFO_FILENAME);
+    $stem = preg_replace('/[^A-Za-z0-9.-]+/', '-', str_replace('_', '-', $stem));
+    $stem = trim((string) preg_replace('/-+/', '-', $stem), '-.');
+    $prefix = preg_replace('/[^A-Za-z0-9.-]+/', '-', str_replace('_', '-', (string) $prefix));
+    $prefix = trim((string) preg_replace('/-+/', '-', $prefix), '-.');
+    if (strtolower($prefix) === 'none') {
+        $prefix = '';
+    }
+    if ($stem === '') {
+        $stem = $wireguard ? 'wireguard' : 'config';
+    }
+    if ($prefix !== '' && stripos($stem, $prefix . '-') !== 0 && strcasecmp($stem, $prefix) !== 0) {
+        $stem = $prefix . '-' . $stem;
+    }
+    if ($wireguard) {
+        $stem = substr($stem, 0, 15);
+        $stem = rtrim($stem, '-.');
+        $extension = 'conf';
+    }
+    if ($extension === '') {
+        $extension = $wireguard ? 'conf' : 'bin';
+    }
+    return $stem . '.' . $extension;
+}
+
+function prepareTelegramInputFile($input, $postFilename = null)
 {
     if ($input instanceof CURLFile) {
         return $input;
@@ -2494,6 +2636,9 @@ function prepareTelegramInputFile($input)
 
         $realPath = realpath($input);
         if ($realPath !== false && is_file($realPath) && is_readable($realPath)) {
+            if (is_string($postFilename) && $postFilename !== '') {
+                return new CURLFile($realPath, 'application/octet-stream', $postFilename);
+            }
             return new CURLFile($realPath);
         }
 
@@ -2505,9 +2650,9 @@ function prepareTelegramInputFile($input)
     return null;
 }
 
-function sendDocument($chat_id, $documentPath, $caption)
+function sendDocument($chat_id, $documentPath, $caption, $filename = null)
 {
-    $document = prepareTelegramInputFile($documentPath);
+    $document = prepareTelegramInputFile($documentPath, $filename);
     if ($document === null) {
         return [
             'ok' => false,
@@ -2864,15 +3009,6 @@ if (!is_numeric($from_id) || (string)(int) $from_id !== (string) $from_id) {
 }
 $from_id = (int) $from_id;
 rx_releaseWebhookConnection();
-$rxUpdateLock = rx_callback_lock_acquire($from_id, 'update', 5);
-if ($rxUpdateLock === false) {
-    exit;
-}
-if (is_string($rxUpdateLock) && $rxUpdateLock !== '') {
-    register_shutdown_function(static function () use ($rxUpdateLock) {
-        rx_callback_lock_release($rxUpdateLock);
-    });
-}
 $text =convertPersianNumbersToEnglish($text);
 
 $text_inline = $update["callback_query"]["message"]['text'] ?? '';

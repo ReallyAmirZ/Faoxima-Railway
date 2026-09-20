@@ -17,7 +17,77 @@ if (!defined('REFACTORED_LEGACY_ROOT')) {
 require_once 'function.php';
 require_once 'config.php';
 require_once 'botapi.php';
-global $connect;
+global $connect, $pdo;
+
+$rxDbHost = isset($dbhost) && $dbhost !== '' ? (string) $dbhost : '';
+$rxDbName = isset($dbname) && $dbname !== '' ? (string) $dbname : '';
+$rxDbUser = isset($usernamedb) && $usernamedb !== '' ? (string) $usernamedb : '';
+$rxDbPass = isset($passworddb) ? (string) $passworddb : '';
+
+if ($rxDbHost === '') {
+    $rxEnvHost = getenv('DB_HOST');
+    $rxDbHost = ($rxEnvHost !== false && $rxEnvHost !== '') ? $rxEnvHost : 'db';
+}
+if ($rxDbName === '') {
+    $rxEnvName = getenv('DB_NAME');
+    if ($rxEnvName === false || $rxEnvName === '') {
+        $rxEnvName = getenv('MYSQL_DATABASE');
+    }
+    $rxDbName = ($rxEnvName !== false) ? (string) $rxEnvName : '';
+}
+if ($rxDbUser === '') {
+    $rxEnvUser = getenv('DB_USER');
+    if ($rxEnvUser === false || $rxEnvUser === '') {
+        $rxEnvUser = getenv('MYSQL_USER');
+    }
+    $rxDbUser = ($rxEnvUser !== false) ? (string) $rxEnvUser : '';
+}
+if ($rxDbPass === '') {
+    $rxEnvPass = getenv('DB_PASS');
+    if ($rxEnvPass === false || $rxEnvPass === '') {
+        $rxEnvPass = getenv('MYSQL_PASSWORD');
+    }
+    $rxDbPass = ($rxEnvPass !== false) ? (string) $rxEnvPass : '';
+}
+
+if (!(isset($connect) && $connect instanceof mysqli)) {
+    if ($rxDbName !== '' && $rxDbUser !== '') {
+        try {
+            $rxMysqli = @new mysqli($rxDbHost, $rxDbUser, $rxDbPass, $rxDbName);
+            if ($rxMysqli->connect_errno === 0) {
+                $rxMysqli->set_charset('utf8mb4');
+                $connect = $rxMysqli;
+            } else {
+                $rxMysqli->close();
+            }
+        } catch (Throwable $e) {
+            error_log('[table.php] MySQLi fallback connection failed');
+        }
+    }
+}
+
+if (!(isset($pdo) && $pdo instanceof PDO)) {
+    if ($rxDbName !== '' && $rxDbUser !== '') {
+        try {
+            $pdo = new PDO(
+                "mysql:host={$rxDbHost};dbname={$rxDbName};charset=utf8mb4",
+                $rxDbUser,
+                $rxDbPass,
+                [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_EMULATE_PREPARES => false,
+                ]
+            );
+        } catch (Throwable $e) {
+            error_log('[table.php] PDO fallback connection failed');
+        }
+    }
+}
+
+if (!(isset($connect) && $connect instanceof mysqli) || !(isset($pdo) && $pdo instanceof PDO)) {
+    throw new RuntimeException('Database connection is unavailable for table migrations.');
+}
 
 if (!function_exists('rxEnsureUtf8mb4Schema')) {
     function rxEnsureUtf8mb4Schema($connection, $pdoConnection = null)
@@ -403,6 +473,8 @@ try {
         addFieldToTable($tableName, 'antispam_muted_until', '0', "VARCHAR(20)");
         addFieldToTable($tableName, 'step_stack', '[]', "TEXT");
         addFieldToTable($tableName, 'nav_state', 'home', "VARCHAR(64)");
+        addFieldToTable($tableName, 'reply_kb_cleared', '0', "VARCHAR(1)");
+        addFieldToTable($tableName, 'reply_kb_cleanup_msg_id', '0', "VARCHAR(20)");
     }
 } catch (PDOException $e) {
     error_log('[panels] ' . $e->getMessage());
@@ -542,6 +614,8 @@ try {
         card_verify_status varchar(20) NULL DEFAULT 'offcardverify',
         card_verify_scope varchar(20) NULL DEFAULT 'all',
         card_verify_min_amount varchar(20) NULL DEFAULT '0',
+        receipt_topic_reporting varchar(20) NULL DEFAULT '1',
+        subscription_link_button varchar(20) NULL DEFAULT '1',
         redis_enabled varchar(20) NULL DEFAULT '0',
         banner_start_status varchar(20) NULL DEFAULT '0',
         banner_start_file_id varchar(255) NULL DEFAULT '',
@@ -606,6 +680,7 @@ try {
         addFieldToTable("setting", "statussupportpv", "offpvsupport", "VARCHAR(100)");
         addFieldToTable("setting", "affiliatespercentage", "0", "VARCHAR(600)");
         addFieldToTable("setting", "inlinebtnmain", "offinline", "VARCHAR(200)");
+        addFieldToTable("setting", "auto_remove_reply_keyboard", "on", "VARCHAR(20)");
         addFieldToTable("setting", "volumewarn", "2", "VARCHAR(200)");
         addFieldToTable("setting", "statusagentrequest", "onrequestagent", "VARCHAR(600)");
         addFieldToTable("setting", "statusnewuser", "onnewuser", "VARCHAR(600)");
@@ -639,6 +714,8 @@ try {
         addFieldToTable("setting", "card_verify_status", "offcardverify", "VARCHAR(20)");
         addFieldToTable("setting", "card_verify_scope", "all", "VARCHAR(20)");
         addFieldToTable("setting", "card_verify_min_amount", "0", "VARCHAR(20)");
+        addFieldToTable("setting", "receipt_topic_reporting", "1", "VARCHAR(20)");
+        addFieldToTable("setting", "subscription_link_button", "1", "VARCHAR(20)");
         addFieldToTable("setting", "PublicLog_Channel", "", "VARCHAR(600)");
         addFieldToTable("setting", "PublicLog_Status", "0", "VARCHAR(20)");
         addFieldToTable("setting", "PublicLog_NewSub", "1", "VARCHAR(20)");
@@ -663,23 +740,28 @@ try {
         id_admin varchar(500) PRIMARY KEY NOT NULL,
         username varchar(1000) NOT NULL,
         password varchar(1000) NOT NULL,
+        password_hash varchar(255) NULL,
+        iplogin varchar(1000) NULL,
         rule varchar(500) NOT NULL,
         last_ticket_seen INT(11) NULL DEFAULT 0)");
         $stmt->execute();
         $randomString = bin2hex(random_bytes(5));
 
 
-        $stmt = $pdo->prepare("INSERT INTO admin (id_admin, rule, username, password) VALUES (:id, :rule, :username, :password)");
+        $stmt = $pdo->prepare("INSERT INTO admin (id_admin, rule, username, password, password_hash) VALUES (:id, :rule, :username, :password, :password_hash)");
         $stmt->execute([
-            ':id'       => (string) $adminnumber,
-            ':rule'     => 'administrator',
-            ':username' => 'admin',
-            ':password' => $randomString,
+            ':id'            => (string) $adminnumber,
+            ':rule'          => 'administrator',
+            ':username'      => 'admin',
+            ':password'      => $randomString,
+            ':password_hash' => password_hash($randomString, PASSWORD_DEFAULT),
         ]);
     } else {
         addFieldToTable("admin", "rule", "administrator", "VARCHAR(200)");
         addFieldToTable("admin", "username", null, "VARCHAR(200)");
         addFieldToTable("admin", "password", null, "VARCHAR(200)");
+        addFieldToTable("admin", "password_hash", null, "VARCHAR(255)");
+        addFieldToTable("admin", "iplogin", null, "VARCHAR(1000)");
         addFieldToTable("admin", "last_ticket_seen", "0", "INT(11)");
     }
 } catch (Exception $e) {
@@ -735,6 +817,7 @@ try {
         username_panel varchar(200) NULL,
         password_panel varchar(200) NULL,
         api_key varchar(500) NULL,
+        pasarguard_auth_mode varchar(20) NOT NULL DEFAULT 'api_key',
         xui_api_token TEXT NULL,
         xui_api_mode varchar(20) NOT NULL DEFAULT 'legacy',
         xui_monitor_state TEXT NULL,
@@ -824,6 +907,11 @@ try {
         addFieldToTable("marzban_panel", "proxies", null, "TEXT");
         addFieldToTable("marzban_panel", "inbounds", null, "TEXT");
         addFieldToTable("marzban_panel", "api_key", null, "VARCHAR(500)");
+        $pasarguardAuthModeColumnExisted = rxTableColumnExists($connect, "marzban_panel", "pasarguard_auth_mode");
+        addFieldToTable("marzban_panel", "pasarguard_auth_mode", "api_key", "VARCHAR(20)");
+        if (!$pasarguardAuthModeColumnExisted) {
+            $connect->query("UPDATE marzban_panel SET pasarguard_auth_mode = 'api_key' WHERE type = 'pasarguard'");
+        }
         addFieldToTable("marzban_panel", "xui_api_token", null, "VARCHAR(1000)");
         $xuiApiModeColumnExisted = rxTableColumnExists($connect, "marzban_panel", "xui_api_mode");
         addFieldToTable("marzban_panel", "xui_api_mode", "legacy", "VARCHAR(20)");
@@ -1176,7 +1264,9 @@ try {
         card_last4 varchar(4) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
         report_chat_id varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
         report_message_id INT NULL,
-        report_thread_id INT NULL)
+        report_thread_id INT NULL,
+        private_receipt_targets TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        direct_payment_done TINYINT(1) NULL)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
         if (!$result) {
             error_log("[table.php] table Payment_report: " . mysqli_error($connect));
@@ -1235,6 +1325,16 @@ try {
         if (mysqli_num_rows($Check_filde) != 1) {
             $connect->query("ALTER TABLE Payment_report ADD report_thread_id INT NULL");
             echo "The report_thread_id field was added ✅";
+        }
+        $Check_filde = $connect->query("SHOW COLUMNS FROM Payment_report LIKE 'private_receipt_targets'");
+        if (mysqli_num_rows($Check_filde) != 1) {
+            $connect->query("ALTER TABLE Payment_report ADD private_receipt_targets TEXT NULL");
+            echo "The private_receipt_targets field was added ✅";
+        }
+        $Check_filde = $connect->query("SHOW COLUMNS FROM Payment_report LIKE 'direct_payment_done'");
+        if (mysqli_num_rows($Check_filde) != 1) {
+            $connect->query("ALTER TABLE Payment_report ADD direct_payment_done TINYINT(1) NULL");
+            echo "The direct_payment_done field was added ✅";
         }
     }
 } catch (Exception $e) {
@@ -1500,6 +1600,7 @@ try {
         ['atlaspay', '🌐 اطلس‌پی'],
         ['tetrapay', '🔷 تتراپی'],
         ['textafterpay', $textafterpay],
+        ['dyn_purchase_subscription_link_line', '🔗 لینک اتصال: {link}'],
         ['textaftertext', $textaftertext],
         ['textmanual', $textmanual],
         ['textselectlocation', '📌 موقعیت سرویس را انتخاب نمایید.'],

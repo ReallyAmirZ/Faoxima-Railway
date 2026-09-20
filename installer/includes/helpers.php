@@ -363,33 +363,42 @@ function rx_run_table_migrations(string $rootDirectory, array $dbInfo): array
     if (!file_exists($tableFile)) {
         return ['ok' => false, 'message' => 'فایل table.php یافت نشد.'];
     }
-    $obLevelBefore = ob_get_level();
     $prevCwd = getcwd();
-    $included = false;
-    $error = null;
+    $lastError = null;
     try {
         chdir(rtrim($rootDirectory, '/'));
-        ob_start();
-        include $tableFile;
-        ob_end_clean();
-        $included = true;
-    } catch (\Throwable $e) {
-        while (ob_get_level() > $obLevelBefore) {
-            ob_end_clean();
+        for ($pass = 1; $pass <= 3; $pass++) {
+            $obLevelBefore = ob_get_level();
+            try {
+                ob_start();
+                include $tableFile;
+                while (ob_get_level() > $obLevelBefore) {
+                    ob_end_clean();
+                }
+            } catch (\Throwable $e) {
+                while (ob_get_level() > $obLevelBefore) {
+                    ob_end_clean();
+                }
+                $lastError = $e->getMessage();
+                if ($pass >= 3) {
+                    return ['ok' => false, 'message' => $lastError ?: 'اجرای table.php امکان‌پذیر نبود.'];
+                }
+                usleep(500000);
+                continue;
+            }
+            if (rx_table_migrations_verify_ready($dbInfo, 1, 0)) {
+                return ['ok' => true, 'message' => ''];
+            }
+            if ($pass < 3) {
+                sleep(1);
+            }
         }
-        $error = $e->getMessage();
     } finally {
         if ($prevCwd !== false) {
             chdir($prevCwd);
         }
     }
-    if (!$included) {
-        return ['ok' => false, 'message' => $error ?: 'اجرای table.php امکان‌پذیر نبود.'];
-    }
-    if (!rx_table_migrations_verify_ready($dbInfo)) {
-        return ['ok' => false, 'message' => 'اسکریپت table.php اجرا شد اما جدول setting در دیتابیس ایجاد نشد. اتصال دیتابیس یا دسترسی‌های کاربر را بررسی کنید.'];
-    }
-    return ['ok' => true, 'message' => ''];
+    return ['ok' => false, 'message' => $lastError ?: 'اسکریپت table.php اجرا شد اما ساختار دیتابیس پس از 3 مرحله migration هنوز کامل نیست. اتصال دیتابیس و سطح دسترسی کاربر را بررسی کنید.'];
 }
 
 function rx_ensure_admin_record(array $dbInfo, string $adminNumber): bool
@@ -400,33 +409,36 @@ function rx_ensure_admin_record(array $dbInfo, string $adminNumber): bool
             return false;
         }
         $connect->set_charset('utf8mb4');
+        $defaultPasswordHash = password_hash('14e9eab674', PASSWORD_DEFAULT);
         $tableCheck = $connect->query("SHOW TABLES LIKE 'admin'");
         if ($tableCheck && $tableCheck->num_rows > 0) {
             $result = $connect->query('SELECT COUNT(*) as cnt FROM admin');
             $countRow = $result ? $result->fetch_assoc() : ['cnt' => 0];
             $count = (int) ($countRow['cnt'] ?? 0);
             if ($count === 0) {
-                $stmt = $connect->prepare("INSERT INTO `admin` (`id_admin`, `username`, `password`, `rule`) VALUES (?, 'admin', '14e9eab674', 'administrator')");
+                $stmt = $connect->prepare("INSERT INTO `admin` (`id_admin`, `username`, `password`, `password_hash`, `rule`) VALUES (?, 'admin', '14e9eab674', ?, 'administrator')");
                 if ($stmt) {
-                    $stmt->bind_param('s', $adminNumber);
+                    $stmt->bind_param('ss', $adminNumber, $defaultPasswordHash);
                     $stmt->execute();
                     $stmt->close();
                 }
             } else {
                 $adminNumberEscaped = $connect->real_escape_string($adminNumber);
-                $connect->query("UPDATE `admin` SET `id_admin` = '{$adminNumberEscaped}', `username` = 'admin', `password` = '14e9eab674', `rule` = 'administrator' LIMIT 1");
+                $defaultPasswordHashEscaped = $connect->real_escape_string($defaultPasswordHash);
+                $connect->query("UPDATE `admin` SET `id_admin` = '{$adminNumberEscaped}', `username` = 'admin', `password` = '14e9eab674', `password_hash` = '{$defaultPasswordHashEscaped}', `rule` = 'administrator' LIMIT 1");
             }
         } else {
             $connect->query("CREATE TABLE `admin` (
               `id_admin` varchar(500) NOT NULL,
               `username` varchar(1000) NOT NULL,
               `password` varchar(1000) NOT NULL,
+              `password_hash` varchar(255) NULL,
               `rule` varchar(500) NOT NULL,
               PRIMARY KEY (`id_admin`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-            $stmt = $connect->prepare("INSERT INTO `admin` (`id_admin`, `username`, `password`, `rule`) VALUES (?, 'admin', '14e9eab674', 'administrator')");
+            $stmt = $connect->prepare("INSERT INTO `admin` (`id_admin`, `username`, `password`, `password_hash`, `rule`) VALUES (?, 'admin', '14e9eab674', ?, 'administrator')");
             if ($stmt) {
-                $stmt->bind_param('s', $adminNumber);
+                $stmt->bind_param('ss', $adminNumber, $defaultPasswordHash);
                 $stmt->execute();
                 $stmt->close();
             }

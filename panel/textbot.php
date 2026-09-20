@@ -9,12 +9,15 @@ if (!defined('FAOXIMA_SKIP_BOTAPI_ROUTER')) {
 if (!defined('FAOXIMA_SKIP_BOTAPI_ROUTER')) {
     define('FAOXIMA_SKIP_BOTAPI_ROUTER', true);
 }
+ini_set('session.cookie_samesite', 'Lax');
+ini_set('session.cookie_httponly', '1');
 session_start();
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/lib/icons.php';
+require_once __DIR__ . '/lib/csrf.php';
 require_once __DIR__ . '/../re/rx/function/database_helpers_1.php';
 
 $query = $pdo->prepare("SELECT * FROM admin WHERE username=:username");
@@ -26,11 +29,13 @@ if (!isset($_SESSION["user"]) || !$adminRow) {
     exit;
 }
 
+fx_csrf_guard();
+
 
 function faoxima_text_categories(): array {
     return [
         'sys'  => ['title' => 'سیستم و شروع',        'icon' => 'gear', 'keys' => ['text_start', 'text_roll', 'miniapp_suggest_1', 'text_account_info']],
-        'srv'  => ['title' => 'سرویس‌ها',              'icon' => 'server', 'keys' => ['text_Purchased_services', 'text_usertest', 'crontest', 'textafterpay', 'textaftertext', 'textmanual', 'textselectlocation', 'text_extend', 'text_wgdashboard', 'text_service_detail', 'dyn_renewconfirm_queued_success']],
+        'srv'  => ['title' => 'سرویس‌ها',              'icon' => 'server', 'keys' => ['text_Purchased_services', 'text_usertest', 'crontest', 'textafterpay', 'dyn_purchase_subscription_link_line', 'textaftertext', 'textmanual', 'textselectlocation', 'text_extend', 'text_wgdashboard', 'text_service_detail', 'dyn_renewconfirm_queued_success']],
         'help' => ['title' => 'راهنما و پشتیبانی',     'icon' => 'message', 'keys' => ['text_fq', 'text_dec_fq', 'text_help', 'text_support', 'text_channel']],
         'fin'  => ['title' => 'مالی و خرید',           'icon' => 'coins', 'keys' => ['text_Add_Balance', 'text_sell', 'text_Tariff_list', 'text_dec_Tariff_list', 'accountwallet', 'text_pishinvoice', 'text_cart', 'text_cart_auto', 'text_Discount', 'text_wheel_luck', 'carttocart', 'textnowpayment', 'textsnowpayment', 'textnowpaymenttron', 'text_star_telegram', 'iranpay3', 'iranpay2', 'iranpay1', 'tonpay', 'cubepay', 'blupal', 'atlaspay', 'tetrapay', 'zarinpal', 'textpaymentnotverify', 'dyn_public_log_btn_label', 'dyn_public_broadcast_new_sub_tpl', 'dyn_public_broadcast_renewal_tpl', 'dyn_public_broadcast_volume_topup_tpl', 'dyn_public_broadcast_time_extra_tpl', 'dyn_public_broadcast_wallet_deposit_tpl']],
         'ref'  => ['title' => 'زیرمجموعه و نمایندگی', 'icon' => 'users', 'keys' => ['text_affiliates', 'textrequestagent', 'textpanelagent', 'text_request_agent_dec']],
@@ -617,6 +622,7 @@ $delKey   = isset($_GET['deleted']) ? (string)$_GET['deleted'] : '';
             </div>
 
             <form method="POST" action="textbot.php" id="textForm" autocomplete="off">
+                <?php echo fx_csrf_field(); ?>
                 <input type="hidden" name="_action" value="save">
 
                 <div class="cat-select" id="catSelect">
@@ -697,6 +703,7 @@ $delKey   = isset($_GET['deleted']) ? (string)$_GET['deleted'] : '';
             <button type="button" class="modal-close" onclick="closeModal('modal-add-text')">&times;</button>
         </div>
         <form method="POST" action="textbot.php">
+            <?php echo fx_csrf_field(); ?>
             <input type="hidden" name="_action" value="add">
             <div class="form-group">
                 <label class="form-label">کلید (انگلیسی، بدون فاصله)</label>
@@ -752,6 +759,7 @@ $delKey   = isset($_GET['deleted']) ? (string)$_GET['deleted'] : '';
 
 
 <form method="POST" action="textbot.php" id="deleteForm" style="display:none;">
+    <?php echo fx_csrf_field(); ?>
     <input type="hidden" name="_action" value="delete">
     <input type="hidden" name="key" id="deleteKey">
 </form>
@@ -909,8 +917,7 @@ function confirmTextEditor() {
     rows.forEach(function (r) {
         r._searchFields = [
             normalizeSearchText(r.dataset.searchKey),
-            normalizeSearchText(r.dataset.searchText),
-            normalizeSearchText(r.dataset.searchCategory)
+            normalizeSearchText(r.dataset.searchText)
         ];
     });
     function applySearch() {

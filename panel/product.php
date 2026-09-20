@@ -1,4 +1,6 @@
 <?php
+ini_set('session.cookie_samesite', 'Lax');
+ini_set('session.cookie_httponly', '1');
 session_start();
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/lib/icons.php';
@@ -6,6 +8,7 @@ require_once __DIR__ . '/lib/pagination.php';
 require_once __DIR__ . '/lib/bulk_delete.php';
 require_once __DIR__ . '/lib/search_filter.php';
 require_once __DIR__ . '/lib/compact_badges.php';
+require_once __DIR__ . '/lib/csrf.php';
 require_once __DIR__ . '/../function.php';
 if (!function_exists('xui_fail2ban_status') && is_file(__DIR__ . '/../x-ui_single.php')) {
     require_once __DIR__ . '/../x-ui_single.php';
@@ -20,6 +23,11 @@ if (!isset($_SESSION["user"]) || !$result) {
     header('Location: login.php');
     return;
 }
+
+if (!(isset($_GET['ajax']) && $_GET['ajax'] === 'fail2ban_check')) {
+    fx_csrf_guard();
+}
+$_csrf = fx_csrf_token();
 
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'fail2ban_check') {
     header('Content-Type: application/json; charset=utf-8');
@@ -103,6 +111,11 @@ alert('محصول از قبل وجود دارد'); window.location.href='product
     $volumeProduct   = $_POST['volume_product']   ?? '';
     $serviceTime     = $_POST['time_product']     ?? '';
     $agentProduct    = $_POST['agent_product']    ?? '';
+    $agentProduct    = strtolower(trim((string)$agentProduct));
+    if (!in_array($agentProduct, ['f', 'n', 'n2', 'all'], true)) {
+        echo "<script>alert('گروه کاربری نامعتبر است'); window.location.href='product.php';</script>";
+        return;
+    }
 
     $locationArr = explode(',', (string)($_POST['namepanel_csv'] ?? ''));
     $locationArr = array_values(array_unique(array_filter(array_map('trim', $locationArr), function ($v) { return $v !== ''; })));
@@ -253,6 +266,7 @@ if (isset($_GET['removeid']) && $_GET['removeid'] !== '') {
 
             <div class="card">
                 <form method="POST" action="product.php" id="bulk-form">
+                    <?php echo fx_csrf_field(); ?>
                     <input type="hidden" name="action" value="bulk_delete">
                     <div class="table-wrap">
                     <table id="productsTable" class="display app-table app-table--summary" style="width:100%">
@@ -356,6 +370,7 @@ if (isset($_GET['removeid']) && $_GET['removeid'] !== '') {
             <button class="modal-close" onclick="closeModal('modal-add-product')">&times;</button>
         </div>
         <form action="product.php" method="POST">
+            <?php echo fx_csrf_field(); ?>
             <div class="form-group">
                 <label class="form-label">نام محصول</label>
                 <input type="text" name="nameproduct" class="form-control" placeholder="نام محصول را وارد کنید" required>
@@ -471,6 +486,7 @@ if (isset($_GET['removeid']) && $_GET['removeid'] !== '') {
             <button class="modal-close" onclick="closeModal('modal-clone-product')">&times;</button>
         </div>
         <form action="product.php" method="POST">
+            <?php echo fx_csrf_field(); ?>
             <div class="form-group">
                 <label class="form-label">نام محصول</label>
                 <input type="text" name="nameproduct" id="clone_name" class="form-control" placeholder="نام محصول را وارد کنید" required>
@@ -720,5 +736,3 @@ if (isset($_GET['removeid']) && $_GET['removeid'] !== '') {
 </script>
 </body>
 </html>
-
-

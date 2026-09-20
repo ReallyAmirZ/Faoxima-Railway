@@ -375,7 +375,7 @@ if (!function_exists('nm_validateSellDiscount')) {
         }
 
         if ((string)($row['usefirst'] ?? '') === '1') {
-            $invoiceCount = select("invoice", "*", "id_user", $from_id, "count");
+            $invoiceCount = MiniDiscount::completedPurchaseCount((string)$from_id);
             if (intval($invoiceCount) != 0) {
                 $res['reason'] = '❌ این کد تخفیف فقط برای اولین خرید قابل استفاده است.';
                 return $res;
@@ -1679,18 +1679,22 @@ function rx_build_smart_random_username($telegramUsername, $telegramId)
     $hasUsername = is_string($telegramUsername) && $telegramUsername !== '' && !in_array(strtolower($telegramUsername), ['not_username', 'none'], true);
     if ($hasUsername) {
         $suffix = str_pad((string) rand(0, 999), 3, '0', STR_PAD_LEFT);
-        $base = substr(strtolower($telegramUsername), 0, 28);
-        return $base . '_' . $suffix;
+        $base = substr(str_replace('_', '-', strtolower($telegramUsername)), 0, 28);
+        return $base . '-' . $suffix;
     }
     $letters = '';
     for ($i = 0; $i < 3; $i++) {
         $letters .= chr(rand(97, 122));
     }
-    return 'u' . $telegramId . '_' . $letters;
+    return 'u' . $telegramId . '-' . $letters;
 }
 
 function generateUsername($from_id, $Metode, $username, $randomString, $text, $namecustome, $usernamecustom)
 {
+    $username = str_replace('_', '-', (string) $username);
+    $text = str_replace('_', '-', (string) $text);
+    $namecustome = str_replace('_', '-', (string) $namecustome);
+    $usernamecustom = str_replace('_', '-', (string) $usernamecustom);
     $setting = select("setting", "*", null, null, "select");
     $user = select("user", "*", "id", $from_id, "select");
     if ($user == false) {
@@ -1699,36 +1703,41 @@ function generateUsername($from_id, $Metode, $username, $randomString, $text, $n
             'number_username' => '',
         );
     }
+    $telegramUsernameMissing = trim($username) === '' || in_array(strtolower($username), ['not_username', 'not-username', 'none'], true);
+    $telegramUsernameBase = $telegramUsernameMissing ? $namecustome : $username;
+    if ($telegramUsernameBase === '' || strtolower($telegramUsernameBase) === 'none') {
+        $telegramUsernameBase = 'u' . $from_id;
+    }
+    $panelCustomBase = trim($namecustome) !== '' && strtolower($namecustome) !== 'none' ? $namecustome : 'u' . $from_id;
+    $requestedBase = trim($text) !== '' ? $text : $telegramUsernameBase;
     if ($Metode == "آیدی عددی + حروف و عدد رندوم") {
-        return $from_id . "_" . $randomString;
+        return $from_id . "-" . $randomString;
+    } elseif ($Metode == "نام کاربری + حروف و عدد رندوم") {
+        return $telegramUsernameBase . "-" . $randomString;
     } elseif ($Metode == "نام کاربری + عدد به ترتیب") {
-        if ($username == "NOT_USERNAME") {
-            if (preg_match('/^\w{3,32}$/', $namecustome)) {
-                $username = $namecustome;
-            }
-        }
-        return $username . "_" . $user['number_username'];
+        return $telegramUsernameBase . "-" . $user['number_username'];
     } elseif ($Metode == "نام کاربری دلخواه")
-        return $text;
+        return $requestedBase;
     elseif ($Metode == "نام کاربری دلخواه + عدد رندوم") {
         $random_number = rand(1000000, 9999999);
-        return $text . "_" . $random_number;
+        return $requestedBase . "-" . $random_number;
     } elseif ($Metode == "متن دلخواه کاربر + رندوم") {
-        return $text;
+        return $requestedBase;
     } elseif ($Metode == "متن دلخواه + عدد رندوم") {
-        return $namecustome . "_" . $randomString;
+        return $panelCustomBase . "-" . $randomString;
     } elseif ($Metode == "متن دلخواه + عدد ترتیبی") {
-        return $namecustome . "_" . $setting['numbercount'];
+        return $panelCustomBase . "-" . $setting['numbercount'];
     } elseif ($Metode == "آیدی عددی+عدد ترتیبی") {
-        return $from_id . "_" . $user['number_username'];
+        return $from_id . "-" . $user['number_username'];
     } elseif ($Metode == "آیدی عددی") {
         return (string) $from_id;
     } elseif ($Metode == "متن دلخواه نماینده + عدد ترتیبی") {
-        if ($usernamecustom == "none") {
-            return $namecustome . "_" . $setting['numbercount'];
+        if (trim($usernamecustom) === '' || strtolower($usernamecustom) === "none") {
+            return $panelCustomBase . "-" . $setting['numbercount'];
         }
-        return $usernamecustom . "_" . $user['number_username'];
+        return $usernamecustom . "-" . $user['number_username'];
     }
+    return $from_id . "-" . $randomString;
 }
 function outputlunk($text)
 {
@@ -1928,7 +1937,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
             return;
         }
         $userAgent = $Balance_id['agent'] ?? 'f';
-        $stmt = $pdo->prepare("SELECT * FROM product WHERE name_product = :name AND (FIND_IN_SET(:loc, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')");
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE name_product = :name AND (FIND_IN_SET(:loc, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
         $stmt->execute([':name' => $get_invoice['name_product'], ':loc' => $get_invoice['Service_location'], ':agent' => $userAgent]);
         $info_product = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($get_invoice['name_product'] == "🛍 حجم دلخواه" || $get_invoice['name_product'] == "⚙️ سرویس دلخواه") {
@@ -1939,7 +1948,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
             $info_product['Service_time'] = $get_invoice['Service_time'];
             $info_product['price_product'] = $get_invoice['price_product'];
         } else {
-            $stmt = $pdo->prepare("SELECT * FROM product WHERE name_product = :name AND (FIND_IN_SET(:loc, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')");
+            $stmt = $pdo->prepare("SELECT * FROM product WHERE name_product = :name AND (FIND_IN_SET(:loc, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
             $stmt->execute([':name' => $get_invoice['name_product'], ':loc' => $get_invoice['Service_location'], ':agent' => $userAgent]);
             $info_product = $stmt->fetch(PDO::FETCH_ASSOC);
         }
@@ -1990,7 +1999,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
         // [username normalize] اگر یوزرنیم فاکتور خالی/کوتاه‌تر از 3 کاراکتر بود، یکی معتبر بساز.
         // این از خطای پنل "Username must be at least 3 characters long" جلوگیری می‌کنه.
         if (!is_string($username_ac) || trim($username_ac) === '' || strlen(trim($username_ac)) < 3) {
-            $username_ac = preg_replace('/[^A-Za-z0-9_]/', '', (string)$Balance_id['id']) . '_' . bin2hex(random_bytes(4));
+            $username_ac = preg_replace('/[^A-Za-z0-9-]/', '', str_replace('_', '-', (string)$Balance_id['id'])) . '-' . bin2hex(random_bytes(4));
             if (strlen($username_ac) < 3) $username_ac = 'u' . bin2hex(random_bytes(4));
             // فقط وقتی id_invoice معتبره update کن (جلوی خطای "Column id_invoice cannot be null" گرفته میشه)
             if (!empty($get_invoice['id_invoice'])) {
@@ -2021,10 +2030,16 @@ function DirectPayment($order_id, $image = 'images.jpg')
         if (function_exists('nmPanelNationalEnabled') && nmPanelNationalEnabled($marzban_list_get)) {
             if (is_array($info_product) && nmStockCompleteBuyFromInventory($Balance_id['id'], $Balance_id, $marzban_list_get, $info_product, $get_invoice['id_invoice'], $username_ac, false, 'paid_national_buy')) {
                 sendmessage($Balance_id['id'], $textbotlang['users']['selectoption'], $keyboard, 'HTML');
+                if (function_exists('update')) {
+                    update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
+                }
                 return;
             }
             $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+            $__refundOkNs = balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+            if ($__refundOkNs && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($Balance_id['id'], 'credit', $Payment_report['price'], 'refund', 'بازگشت وجه - موجودی انبار ملی تمام شده', (string)$order_id, 'invoice', (string)$get_invoice['id_invoice']);
+            }
             try {
                 $__nationalNote = '[auto-refund: national stock empty at ' . date('Y-m-d H:i:s') . ']';
                 $__mk = $pdo->prepare("UPDATE Payment_report SET dec_not_confirmed = CASE WHEN dec_not_confirmed IS NULL OR dec_not_confirmed = '' THEN :n1 ELSE CONCAT(dec_not_confirmed, ' | ', :n2) END WHERE id_order = :o");
@@ -2070,7 +2085,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                 $__msgRaw = is_array($dataoutput) ? ($dataoutput['msg'] ?? '') : '';
                 $__msgStr = is_string($__msgRaw) ? $__msgRaw : json_encode($__msgRaw);
                 if (stripos($__msgStr, 'duplicate') !== false || stripos($__msgStr, 'already exist') !== false || stripos($__msgStr, 'exists') !== false) {
-                    $username_ac = preg_replace('/[^A-Za-z0-9_]/', '', (string)$Balance_id['id']) . '_' . bin2hex(random_bytes(4));
+                    $username_ac = preg_replace('/[^A-Za-z0-9-]/', '', str_replace('_', '-', (string)$Balance_id['id'])) . '-' . bin2hex(random_bytes(4));
                     if (strlen($username_ac) < 3) $username_ac = 'u' . bin2hex(random_bytes(4));
                     if (!empty($get_invoice['id_invoice'])) {
                         try { update("invoice", "username", $username_ac, "id_invoice", $get_invoice['id_invoice']); } catch (Throwable $__e2) { /* fail-open */ }
@@ -2098,7 +2113,10 @@ function DirectPayment($order_id, $image = 'images.jpg')
         if ($dataoutput['username'] == null) {
             $dataoutput['msg'] = json_encode($dataoutput['msg']);
             $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+            $__refundOkCu = balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+            if ($__refundOkCu && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($Balance_id['id'], 'credit', $Payment_report['price'], 'refund', 'بازگشت وجه - خطا در ساخت سرویس', (string)$order_id, 'invoice', (string)$get_invoice['id_invoice']);
+            }
             // [refund-marker] برای جلوگیری از double-refund توسط retry — حتماً قبل از sendmessageها مارک کن
             try {
                 $__failNote = '[auto-refund: service creation failed at ' . date('Y-m-d H:i:s') . ']';
@@ -2327,7 +2345,10 @@ $textonebuy
         }
         if (!is_array($prodcut)) {
             $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+            $__refundOkPr = balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+            if ($__refundOkPr && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($Balance_id['id'], 'credit', $Payment_report['price'], 'refund', 'بازگشت وجه - محصول تمدید در دسترس نیست', (string)$Payment_report['id_order'], 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+            }
             sendmessage($Balance_id['id'], "❌ محصول این تمدید دیگر در دسترس نیست؛ مبلغ پرداختی به کیف پول شما بازگردانده شد.", $keyboard, 'HTML');
             return;
         }
@@ -2341,7 +2362,10 @@ $textonebuy
             if (!is_array($stockNew) || (string)($stockNew['content'] ?? '') === '') {
                 if (is_array($stockNew) && function_exists('nmStockReleaseReservation')) nmStockReleaseReservation($stockNew);
                 $balance = $Balance_id['Balance'] + $Payment_report['price'];
-                balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+                $__refundOkSt = balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+                if ($__refundOkSt && function_exists('wallet_ledger_record')) {
+                    wallet_ledger_record($Balance_id['id'], 'credit', $Payment_report['price'], 'refund', 'بازگشت وجه - موجودی انبار تمام شده', (string)$Payment_report['id_order'], 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+                }
                 sendmessage($Balance_id['id'], "❌ موجودی انبار برای این محصول تمام شده است؛ مبلغ پرداختی به کیف پول شما بازگردانده شد.", $keyboard, 'HTML');
                 return;
             }
@@ -2364,7 +2388,10 @@ $textonebuy
             $extend = $ManagePanel->extend($marzban_list_get['Methodextend'], $prodcut['Volume_constraint'], $prodcut['Service_time'], $nameloc['username'], $prodcut['code_product'], $marzban_list_get['code_panel']);
         if ($extend['status'] == false) {
             $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+            $__refundOkEx = balance_atomic_credit($Balance_id['id'], $Payment_report['price']);
+            if ($__refundOkEx && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($Balance_id['id'], 'credit', $Payment_report['price'], 'refund', 'بازگشت وجه - خطا در تمدید سرویس', (string)$Payment_report['id_order'], 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+            }
             sendmessage($Balance_id['id'], $textbotlang['users']['sell']['ErrorConfig'], $keyboard, 'HTML');
             sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل تمدید نشدن سرویس مبلغ $balance تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
             $extend['msg'] = json_encode($extend['msg']);
@@ -2747,8 +2774,13 @@ $textonebuy
         $__paidAmount = intval($Payment_report['price']);
         $__creditAmount = $__paidAmount + $__chargeBonus;
         $Balance_confrim = intval($Balance_id['Balance']) + $__creditAmount;
+        $rxClaimCharge = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'paid' WHERE id_order = :o AND payment_Status <> 'paid'");
+        $rxClaimCharge->execute([':o' => $Payment_report['id_order']]);
+        if ($rxClaimCharge->rowCount() < 1) {
+            return;
+        }
+        if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
         balance_atomic_credit($Payment_report['id_user'], $__creditAmount);
-        update("Payment_report", "payment_Status", "paid", "id_order", $Payment_report['id_order']);
         update("Payment_report", "at_updated", date('Y/m/d H:i:s'), "id_order", $Payment_report['id_order']);
         update("user", "Processing_value_four", "", "id", $Payment_report['id_user']);
 
@@ -2803,5 +2835,8 @@ $textonebuy
                 'price'   => $__creditFmt,
             ], $setting);
         }
+    }
+    if (function_exists('update')) {
+        update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
     }
 }

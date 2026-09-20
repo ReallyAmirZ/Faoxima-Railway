@@ -109,7 +109,7 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
                 @telegram('answerCallbackQuery', ['callback_query_id' => $callback_query_id, 'cache_time' => 0]);
             }
         }
-        if (!preg_match('~(?!_)^[a-z][a-z\d_]{2,32}(?<!_)$~i', $text)) {
+        if (!preg_match('~(?![_-])^[a-z][a-z\d_-]{2,32}(?<![_-])$~i', $text)) {
             sendmessage($from_id, $textbotlang['users']['invalidusername'], $_rx_usernameKb, 'HTML');
             return;
         }
@@ -139,7 +139,7 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
     $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
     $random_number = rand(1000000, 9999999);
     if (isset($DataUserOut['username']) || rxTableValueExists('invoice', 'username', $username_ac)) {
-        $username_ac = $random_number . "_" . $username_ac;
+        $username_ac = $random_number . "-" . $username_ac;
     }
     $datac = array(
         'expire' => strtotime(date("Y-m-d H:i:s", strtotime("+" . $marzban_list_get['time_usertest'] . "hours"))),
@@ -878,6 +878,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
         'service_action'       => 'عملیات سرویس',
         'transfer_out'         => 'انتقال موجودی به کاربر دیگر',
         'transfer_in'          => 'انتقال موجودی از کاربر دیگر',
+        'referral_gift'        => 'هدیه عضویت زیرمجموعه',
     ];
     $txRangeKey = $txRangeMatch[1];
     $txLimit = 5;
@@ -1045,16 +1046,19 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
         step('home', $from_id);
         return;
     }
+    wallet_ledger_record($from_id, 'debit', $trAmount, 'transfer_out', 'انتقال موجودی به کاربر ' . $trRecipientId, null, 'user', (string)$trRecipientId);
     $trCredited = balance_atomic_credit($trRecipientId, $trAmount);
     if (!$trCredited) {
-        balance_atomic_credit($from_id, $trAmount);
+        $trRefunded = balance_atomic_credit($from_id, $trAmount);
+        if ($trRefunded) {
+            wallet_ledger_record($from_id, 'credit', $trAmount, 'refund', 'بازگشت وجه انتقال ناموفق', null, 'user', (string)$trRecipientId);
+        }
         Editmessagetext($from_id, $message_id, "❌ خطا در واریز به کاربر مقصد. مبلغ به کیف پول شما بازگشت داده شد.", null, 'HTML');
         update("user", "Processing_value", "0", "id", $from_id);
         update("user", "Processing_value_one", "", "id", $from_id);
         step('home', $from_id);
         return;
     }
-    wallet_ledger_record($from_id, 'debit', $trAmount, 'transfer_out', 'انتقال موجودی به کاربر ' . $trRecipientId, null, 'user', (string)$trRecipientId);
     wallet_ledger_record($trRecipientId, 'credit', $trAmount, 'transfer_in', 'انتقال موجودی از کاربر ' . $from_id, null, 'user', (string)$from_id);
     update("user", "Processing_value", "0", "id", $from_id);
     update("user", "Processing_value_one", "", "id", $from_id);
@@ -1122,14 +1126,9 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
                 return;
             }
         }
-        $stmt = $pdo->prepare("SELECT * FROM invoice WHERE status = 'active' AND (status = 'end_of_time' OR status = 'end_of_volume' OR status = 'sendedwarn' OR Status = 'send_on_hold')");
-        $stmt->execute();
-        $countinovoice = $stmt->rowCount();
-        if ($locationproduct['limit_panel'] != "unlimited") {
-            if ($countinovoice >= $locationproduct['limit_panel']) {
-                sendmessage($from_id, $textbotlang['Admin']['managepanel']['limitedpanelfirst'], null, 'HTML');
-                return;
-            }
+        if (panel_creation_limit_reached($locationproduct)) {
+            sendmessage($from_id, $textbotlang['Admin']['managepanel']['limitedpanelfirst'], null, 'HTML');
+            return;
         }
         if ($user['step'] == "statusnamecustom") {
             if (!isset($update['message']) && empty($text)) { return; }
@@ -1151,7 +1150,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
                 ':location' => $location,
                 ':agent' => $user['agent']
             ];
-            $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')");
+            $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
             $productCountStmt->execute($productCountParams);
             $nullproduct = (int)$productCountStmt->fetchColumn();
             if ($nullproduct == 0) {
@@ -1180,7 +1179,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
                     sendmessage($from_id, "📌 دسته بندی خود را انتخاب نمایید!", KeyboardCategory($location, $user['agent'], $backuser), 'HTML');
                 }
             } else {
-                $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')";
+                $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))";
                 $queryParams = [
                     ':location' => $location,
                     ':agent' => $user['agent']
@@ -1211,7 +1210,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
                 ':location' => $location,
                 ':agent' => $user['agent']
             ];
-            $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')");
+            $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
             $productCountStmt->execute($productCountParams);
             $nullproduct = (int)$productCountStmt->fetchColumn();
             if ($nullproduct == 0) {
@@ -1269,17 +1268,9 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $location, "select");
     $locationproductcount = select("marzban_panel", "*", "name_panel", $location, "count");
-    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE (status = 'active' OR status = 'end_of_time' OR status = 'end_of_volume' OR status = 'sendedwarn' OR Status = 'send_on_hold') AND  Service_location = :loc");
-    $stmt->execute([':loc' => (string)($marzban_list_get['name_panel'] ?? '')]);
-    $countinovoice = $stmt->rowCount();
-    if ($marzban_list_get['limit_panel'] != "unlimited") {
-        if ($countinovoice >= $marzban_list_get['limit_panel']) {
-
-
-
-            sendmessage($from_id, $textbotlang['Admin']['managepanel']['limitedpanel'], null, 'HTML');
-            return;
-        }
+    if (panel_creation_limit_reached($marzban_list_get)) {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['limitedpanel'], null, 'HTML');
+        return;
     }
     if ($statusnote) {
         savedata('save', "name_panel", $location);
@@ -1290,7 +1281,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
         ':location' => $location,
         ':agent' => $user['agent']
     ];
-    $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')");
+    $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
     $productCountStmt->execute($productCountParams);
     $nullproduct = (int)$productCountStmt->fetchColumn();
     if ($nullproduct == 0) {
@@ -1317,7 +1308,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
             $marzban_list_get = select("marzban_panel", "*", "name_panel", $location, "select");
             Editmessagetext($from_id, $message_id, "📌 دسته بندی خود را انتخاب نمایید!", KeyboardCategory($location, $user['agent'], "buybacktow"));
         } else {
-            $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')";
+            $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))";
             $queryParams = [
                 ':location' => $location,
                 ':agent' => $user['agent']
@@ -1344,7 +1335,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
             Editmessagetext($from_id, $message_id, $textproduct, KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, $back, null, "customsellvolume", $user['agent'], $queryParams));
         }
     } else {
-        $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')");
+        $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
         $productCountStmt->execute($productCountParams);
         $nullproduct = (int)$productCountStmt->fetchColumn();
         if ($nullproduct == 0) {
@@ -1374,14 +1365,14 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     [$catClause, $catParams] = nmBuildFindInSetClause('category', $catValues, 'catv');
     if ($catClause === '') $catClause = '1=0';
     if (isset($userdate['monthproduct'])) {
-        $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND {$catClause} AND Service_time = :service_time AND (agent = :agent OR agent = 'all')";
+        $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND {$catClause} AND Service_time = :service_time AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))";
         $queryParams = array_merge([
             ':location' => $userdate['name_panel'],
             ':service_time' => $userdate['monthproduct'],
             ':agent' => $user['agent']
         ], $catParams);
     } else {
-        $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND {$catClause} AND (agent = :agent OR agent = 'all')";
+        $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND {$catClause} AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))";
         $queryParams = array_merge([
             ':location' => $userdate['name_panel'],
             ':agent' => $user['agent']
@@ -1420,7 +1411,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
         }
         Editmessagetext($from_id, $message_id, "📌 دسته بندی خود را انتخاب نمایید!", KeyboardCategory($marzban_list_get['name_panel'], $user['agent'], $back));
     } else {
-        $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND Service_time = :service_time AND (agent = :agent OR agent = 'all')";
+        $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND Service_time = :service_time AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))";
         $queryParams = [
             ':location' => $userdate['name_panel'],
             ':service_time' => $monthenumber,
@@ -1567,7 +1558,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
                 @telegram('answerCallbackQuery', ['callback_query_id' => $callback_query_id, 'cache_time' => 0]);
             }
         }
-        if (!preg_match('~(?!_)^[a-z][a-z\d_]{2,32}(?<!_)$~i', $text)) {
+        if (!preg_match('~(?![_-])^[a-z][a-z\d_-]{2,32}(?<![_-])$~i', $text)) {
             sendmessage($from_id, $textbotlang['users']['invalidusername'], $_rx_usernameKb, 'HTML');
             return;
         }
@@ -1593,7 +1584,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
         } elseif (function_exists('nmProductByCodeForPanel')) {
             $info_product = nmProductByCodeForPanel($loc, $userdate['name_panel'], $user['agent']);
         } else {
-            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all') LIMIT 1");
+            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers')) LIMIT 1");
             $stmt->execute([
                 ':code_product' => $loc,
                 ':location' => $userdate['name_panel'],
@@ -1621,7 +1612,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     $random_number = rand(1000000, 9999999);
     $usernameWasRenamed = isset($DataUserOut['username']) || rxTableValueExists('invoice', 'username', $username_ac);
     if ($usernameWasRenamed) {
-        $username_ac = $random_number . "_" . $username_ac;
+        $username_ac = $random_number . "-" . $username_ac;
     }
     if (isset($username_ac))
         update("user", "Processing_value_tow", $username_ac, "id", $from_id);
@@ -1710,7 +1701,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
         } elseif (function_exists('nmProductByCodeForPanel')) {
             $info_product = nmProductByCodeForPanel($user['Processing_value_one'], $userdate['name_panel'], $user['agent']);
         } else {
-            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all') LIMIT 1");
+            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers')) LIMIT 1");
             $stmt->execute([
                 ':code_product' => $user['Processing_value_one'],
                 ':location' => $userdate['name_panel'],
@@ -2100,10 +2091,12 @@ $textonebuy
     } elseif (function_exists('rxResolveProductForPanel')) {
         $info_product = rxResolveProductForPanel($user['Processing_value_one'], $userdate['name_panel'], $user['agent'], $userdate['category'] ?? null, $userdate['monthproduct'] ?? null);
     } else {
-        $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:Location, Location) > 0 or Location = '/all') LIMIT 1");
-        $stmt->bindParam(':code_product', $user['Processing_value_one'], PDO::PARAM_STR);
-        $stmt->bindParam(':Location', $userdate['name_panel'], PDO::PARAM_STR);
-        $stmt->execute();
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:Location, Location) > 0 or Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers')) LIMIT 1");
+        $stmt->execute([
+            ':code_product' => $user['Processing_value_one'],
+            ':Location' => $userdate['name_panel'],
+            ':agent' => $user['agent'],
+        ]);
         $info_product = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     if (!is_array($info_product) || !isset($info_product['code_product'])) {
@@ -2142,7 +2135,7 @@ $textonebuy
         if (function_exists('rxResolveProductForPanel')) {
             $info_product = rxResolveProductForPanel($user['Processing_value_one'], $userdate['name_panel'], $user['agent'], $userdate['category'] ?? null, $userdate['monthproduct'] ?? null);
         } else {
-            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all') LIMIT 1");
+            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers')) LIMIT 1");
             $stmt->execute([
                 ':code_product' => $user['Processing_value_one'],
                 ':location' => $userdate['name_panel'],
@@ -2239,7 +2232,7 @@ $textonebuy
         ':location' => $location,
         ':agent' => $user['agent']
     ];
-    $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND agent = :agent");
+    $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
     $productCountStmt->execute($productCountParams);
     $nullproduct = (int)$productCountStmt->fetchColumn();
     if ($nullproduct == 0) {
@@ -2258,7 +2251,7 @@ $textonebuy
     } else {
         $statuscustom = false;
     }
-    $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND agent = :agent";
+    $query = "SELECT * FROM product WHERE (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))";
     $textproduct = faoxima_render_text($textbotlang['users']['sell']['Service-select-no-category'], [
         'panel' => $marzban_list_get['name_panel'],
     ]);
@@ -2363,7 +2356,7 @@ $textonebuy
                 @telegram('answerCallbackQuery', ['callback_query_id' => $callback_query_id, 'cache_time' => 0]);
             }
         }
-        if (!preg_match('~(?!_)^[a-z][a-z\d_]{2,32}(?<!_)$~i', $text)) {
+        if (!preg_match('~(?![_-])^[a-z][a-z\d_-]{2,32}(?<![_-])$~i', $text)) {
             sendmessage($from_id, $textbotlang['users']['invalidusername'], $_rx_usernameKb, 'HTML');
             return;
         }
@@ -2387,7 +2380,7 @@ $textonebuy
         if (function_exists('rxResolveProductForPanel')) {
             $info_product = rxResolveProductForPanel($loc, $user['Processing_value'], $user['agent']);
         } else {
-            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all') LIMIT 1");
+            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers')) LIMIT 1");
             $stmt->execute([
                 ':code_product' => $loc,
                 ':location' => $user['Processing_value'],
@@ -2445,7 +2438,7 @@ $textonebuy
         if (function_exists('rxResolveProductForPanel')) {
             $info_product = rxResolveProductForPanel($user['Processing_value_one'], $user['Processing_value'], $user['agent']);
         } else {
-            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all') LIMIT 1");
+            $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers')) LIMIT 1");
             $stmt->execute([
                 ':code_product' => $user['Processing_value_one'],
                 ':location' => $user['Processing_value'],
@@ -2548,9 +2541,9 @@ $textonebuy
     for ($i = 0; $i < $user['Processing_value_four']; $i++) {
         $__bulkItemCharge = $__bulkUnitCharge + (($i == $__bulkQty - 1) ? $__bulkUnitChargeRemainder : 0);
         $random_number = rand(1000000, 9999999);
-        $username_acc = $username_ac . "_" . $i;
+        $username_acc = $username_ac . "-" . $i;
         if (rxTableValueExists('invoice', 'username', $username_acc)) {
-            $username_acc = $random_number . "_" . $username_acc;
+            $username_acc = $random_number . "-" . $username_acc;
         }
         $randomString = bin2hex(random_bytes(4));
         if (rxTableValueExists('invoice', 'id_invoice', $randomString)) {
@@ -2594,14 +2587,17 @@ $textonebuy
             ];
             nmStockDeliverConfig($stock, $inventoryInvoice, '✅ وضعیت نت ملی فعال است؛ اشتراک از انبار شبکه‌ملی تحویل شد');
             if (function_exists('balance_atomic_charge')) {
-                balance_atomic_charge($from_id, (float)$__bulkItemCharge, $__bulkAllowNeg);
+                $__bulkChargeNm = balance_atomic_charge($from_id, (float)$__bulkItemCharge, $__bulkAllowNeg);
+                if (!empty($__bulkChargeNm['ok']) && function_exists('wallet_ledger_record')) {
+                    wallet_ledger_record($from_id, 'debit', $__bulkItemCharge, 'purchase', 'خرید انبوه سرویس (انبار ملی)', (string)$randomString, 'invoice', (string)$randomString);
+                }
             }
             $__bulkChargedTotal += $__bulkItemCharge;
             continue;
         }
         $get_username_Check = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_acc);
         if (isset($get_username_Check['username']) || rxTableValueExists('invoice', 'username', $username_acc)) {
-            $username_acc = $random_number . "_" . $username_acc;
+            $username_acc = $random_number . "-" . $username_acc;
         }
         $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_acc, $datac);
         if ($dataoutput['username'] == null) {
@@ -2663,7 +2659,10 @@ $textonebuy
         $textcreatuser = applyConnectionPlaceholders($textcreatuser, $output_config_link, $config);
         sendMessageService($marzban_list_get, $dataoutput['configs'], $output_config_link, $dataoutput['username'], $Shoppinginfo, $textcreatuser, $randomString);
         if (function_exists('balance_atomic_charge')) {
-            balance_atomic_charge($from_id, (float)$__bulkItemCharge, $__bulkAllowNeg);
+            $__bulkChargeLive = balance_atomic_charge($from_id, (float)$__bulkItemCharge, $__bulkAllowNeg);
+            if (!empty($__bulkChargeLive['ok']) && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($from_id, 'debit', $__bulkItemCharge, 'purchase', 'خرید انبوه سرویس', (string)$randomString, 'invoice', (string)$randomString);
+            }
         } else {
             update("user", "Balance", select("user", "Balance", "id", $from_id, "select")['Balance'] - $__bulkItemCharge, "id", $from_id);
         }
@@ -3243,7 +3242,7 @@ $textonebuy
         $_purge->execute();
         $_purge->close();
 
-        $_purge_ab = $connect->prepare("DELETE FROM Payment_report WHERE id_user = ? AND payment_Status IN ('Unpaid','pending','waiting') AND Payment_Method = 'cart to cart' AND (dec_not_confirmed IS NULL OR dec_not_confirmed = '')");
+        $_purge_ab = $connect->prepare("DELETE FROM Payment_report WHERE id_user = ? AND payment_Status IN ('Unpaid','pending') AND Payment_Method = 'cart to cart' AND (dec_not_confirmed IS NULL OR dec_not_confirmed = '')");
         $_purge_ab->bind_param("s", $from_id_sql);
         $_purge_ab->execute();
         $_purge_ab->close();

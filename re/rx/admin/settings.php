@@ -30,8 +30,8 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
     nm_adminInstantReply($from_id, $textbotlang['users']['selectoption'], $helpedit, 'HTML');
     update("user", "Processing_value", $text, "id", $from_id);
     step("help_edit", $from_id);
-} elseif ($text == "ویرایش نام" && $adminrulecheck['rule'] == "administrator") {
-    nm_adminInstantReply($from_id, "نام جدید را ارسال کنید", $backadmin, 'HTML');
+} elseif ($text == "ویرایش نام آموزش" && $adminrulecheck['rule'] == "administrator") {
+    nm_adminInstantReply($from_id, "نام جدید آموزش را ارسال کنید", $backadmin, 'HTML');
     step('changenamehelp', $from_id);
 } elseif ($user['step'] == "changenamehelp") {
     if (!isset($update['message']) && empty($text)) { return; }
@@ -168,43 +168,250 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
     sendDocument($from_id, 'api/documents.txt', "📌 داکیومنت api ربات
 نکات :
 ۱ - در صورتی که به endpoint خاصی نیاز داشتید به اکانت پشتیبانی پیام دهید تا بررسی شود.");
-} elseif ($text == "✅ پنل تحت وب" && $adminrulecheck['rule'] == "administrator") {
-    $admin_select = select("admin", "*", "id_admin", $from_id, "select");
-    $randomString = bin2hex(random_bytes(6));
-    update("admin", "username", $from_id, "id_admin", $from_id);
-    if ($admin_select['password'] == null) {
-        update("admin", "password", $randomString, "id_admin", $from_id);
-    } else {
-        $randomString = $admin_select['password'];
+} elseif (($text == "✅ پنل تحت وب" || $datain == "webpanel_mgr_list") && $adminrulecheck['rule'] == "administrator") {
+    $webpanelListAdmins = select("admin", "*", null, null, "fetchAll");
+    $webpanelListKeyboard = ['inline_keyboard' => []];
+    foreach ($webpanelListAdmins as $webpanelListRow) {
+        $webpanelListId = isset($webpanelListRow['id_admin']) ? trim($webpanelListRow['id_admin']) : '';
+        if ($webpanelListId === '') {
+            continue;
+        }
+        $webpanelListUsername = trim((string)($webpanelListRow['username'] ?? '')) !== '' ? trim((string)($webpanelListRow['username'] ?? '')) : $webpanelListId;
+        $webpanelListKeyboard['inline_keyboard'][] = [
+            ['text' => "👤 {$webpanelListUsername} — {$webpanelListId}", 'callback_data' => "webpanel_mgr_view_" . $webpanelListId],
+        ];
     }
-    $keyboardstatistics = json_encode([
-        'inline_keyboard' => [
-            [
-                ['text' => "تنظیم آیپی ورود", 'callback_data' => 'iploginset'],
-            ],
-        ]
-    ]);
-    nm_adminInstantReply($from_id, "✅  پنل تحت وب شما با موفقیت فعال گردید.
+    $webpanelListKeyboard['inline_keyboard'][] = [
+        ['text' => "🔙 بازگشت به منوی قبل", 'callback_data' => "set_backadmin"],
+        ['text' => "🏠 منوی مدیریت", 'callback_data' => "adm_hub_main"],
+    ];
+    $webpanelListKeyboardJson = json_encode($webpanelListKeyboard);
+    $webpanelListMsg = "✅ <b>پنل تحت وب</b>\n";
+    $webpanelListMsg .= "━━━━━━━━━━━━━━━━━━━━\n";
+    $webpanelListMsg .= "برای مدیریت حساب پنل هر ادمین (نام کاربری، رمز عبور، آیپی ورود)، روی نام او بزنید.";
+    if ($message_id) {
+        Editmessagetext($from_id, $message_id, $webpanelListMsg, $webpanelListKeyboardJson);
+    } else {
+        nm_adminInstantReply($from_id, $webpanelListMsg, $webpanelListKeyboardJson, 'HTML');
+    }
+} elseif (preg_match('/^webpanel_mgr_view_(\w+)$/', $datain, $webpanelMgrViewMatch) && $adminrulecheck['rule'] == "administrator") {
+    $viewAdminId = trim($webpanelMgrViewMatch[1]);
+    $viewAdminRow = select("admin", "*", "id_admin", $viewAdminId, "select");
+    if (!$viewAdminRow) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        return;
+    }
+    [$viewIpList, $viewIpUnlimited] = getAdminIpLoginState($viewAdminId);
+    $viewIsMain = trim($viewAdminId) === trim((string) $adminnumber);
+    $viewIpStatus = $viewIpUnlimited ? "♾️ نامحدود" : (empty($viewIpList) ? "🔒 مسدود (هیچ آیپی تنظیم نشده)" : "📋 " . count($viewIpList) . " آیپی مجاز");
+    $viewMsg = "👤 <b>مدیریت حساب پنل تحت وب</b>\n";
+    $viewMsg .= "━━━━━━━━━━━━━━━━━━━━\n";
+    $viewMsg .= "🪪 شناسه عددی: <code>{$viewAdminId}</code>\n";
+    $viewMsg .= "👤 نام کاربری: <code>" . htmlspecialchars((string)($viewAdminRow['username'] ?? '')) . "</code>\n";
+    $viewMsg .= "🛡 نقش: " . htmlspecialchars((string)($viewAdminRow['rule'] ?? '')) . ($viewIsMain ? " (ادمین اصلی)" : "") . "\n";
+    $viewMsg .= "🌐 آیپی ورود: {$viewIpStatus}\n";
+    $viewMsg .= "━━━━━━━━━━━━━━━━━━━━";
+    $viewKeyboard = ['inline_keyboard' => []];
+    $viewKeyboard['inline_keyboard'][] = [
+        ['text' => "🔐 اطلاعات ورود پنل", 'callback_data' => "webpanel_mgr_creds_" . $viewAdminId],
+    ];
+    $viewKeyboard['inline_keyboard'][] = [
+        ['text' => "✏️ تغییر نام کاربری", 'callback_data' => "webpanel_mgr_uname_" . $viewAdminId],
+    ];
+    $viewKeyboard['inline_keyboard'][] = [
+        ['text' => "🔑 ریست رمز عبور", 'callback_data' => "webpanel_mgr_resetpass_" . $viewAdminId],
+    ];
+    $viewKeyboard['inline_keyboard'][] = [
+        ['text' => "🌐 تنظیم آیپی ورود اختصاصی", 'callback_data' => "webpanel_mgr_ip_" . $viewAdminId],
+    ];
+    $viewKeyboard['inline_keyboard'][] = [
+        ['text' => "◀️ بازگشت به لیست ادمین‌ها", 'callback_data' => "webpanel_mgr_list"],
+    ];
+    $viewKeyboardJson = json_encode($viewKeyboard);
+    if ($message_id) {
+        Editmessagetext($from_id, $message_id, $viewMsg, $viewKeyboardJson);
+    } else {
+        nm_adminInstantReply($from_id, $viewMsg, $viewKeyboardJson, 'HTML');
+    }
+} elseif (preg_match('/^webpanel_mgr_creds_(\w+)$/', $datain, $webpanelMgrCredsMatch) && $adminrulecheck['rule'] == "administrator") {
+    $credsAdminId = trim($webpanelMgrCredsMatch[1]);
+    $credsAdminRow = select("admin", "*", "id_admin", $credsAdminId, "select");
+    if (!$credsAdminRow) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        return;
+    }
+    $credsPassword = $credsAdminRow['password'] ?? null;
+    if ($credsPassword === null || $credsPassword === '') {
+        $credsPassword = bin2hex(random_bytes(6));
+        update("admin", "password", $credsPassword, "id_admin", $credsAdminId);
+        update("admin", "password_hash", password_hash($credsPassword, PASSWORD_DEFAULT), "id_admin", $credsAdminId);
+    }
+    $credsUsername = trim((string)($credsAdminRow['username'] ?? ''));
+    if ($credsUsername === '') {
+        $credsUsername = $credsAdminId;
+        update("admin", "username", $credsUsername, "id_admin", $credsAdminId);
+    }
+    $credsBackKb = json_encode(['inline_keyboard' => [[['text' => "◀️ بازگشت", 'callback_data' => "webpanel_mgr_view_" . $credsAdminId]]]]);
+    nm_adminInstantReply($from_id, "🔐 <b>اطلاعات ورود پنل تحت وب</b>
 
 🔗آدرس ورود : https://$domainhosts/panel
-👤نام کاربری :  <code>$from_id</code>
-🔑رمز عبور :  <code>$randomString</code>", $keyboardstatistics, 'HTML');
+👤نام کاربری :  <code>" . htmlspecialchars($credsUsername) . "</code>
+🔑رمز عبور :  <code>{$credsPassword}</code>", $credsBackKb, 'HTML');
+} elseif (preg_match('/^webpanel_mgr_uname_(\w+)$/', $datain, $webpanelMgrUnameMatch) && $adminrulecheck['rule'] == "administrator") {
+    $targetAdminId = trim($webpanelMgrUnameMatch[1]);
+    if (!select("admin", "id_admin", "id_admin", $targetAdminId, "select")) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        return;
+    }
+    update("user", "Processing_value", $targetAdminId, "id", $from_id);
+    $unameBackKb = json_encode(['inline_keyboard' => [[['text' => "◀️ انصراف", 'callback_data' => "webpanel_mgr_view_" . $targetAdminId]]]]);
+    nm_adminInstantReply($from_id, "📌 نام کاربری جدید را ارسال کنید.", $unameBackKb, 'HTML');
+    step("webpanel_mgr_get_uname", $from_id);
+} elseif ($user['step'] == "webpanel_mgr_get_uname" && $adminrulecheck['rule'] == "administrator") {
+    if (!isset($update['message']) && empty($text)) { return; }
+    $newUsername = trim($text);
+    $targetAdminId = trim((string)($user['Processing_value'] ?? ''));
+    if ($newUsername === '' || $targetAdminId === '') {
+        nm_adminInstantReply($from_id, "❌ نام کاربری نامعتبر است.", null, 'HTML');
+        return;
+    }
+    if (!select("admin", "id_admin", "id_admin", $targetAdminId, "select")) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    update("admin", "username", $newUsername, "id_admin", $targetAdminId);
+    step('home', $from_id);
+    nm_adminInstantReply($from_id, "✅ نام کاربری با موفقیت به «" . htmlspecialchars($newUsername) . "» تغییر یافت.", $keyboardadmin, 'HTML');
+} elseif (preg_match('/^webpanel_mgr_resetpass_(\w+)$/', $datain, $webpanelMgrResetMatch) && $adminrulecheck['rule'] == "administrator") {
+    $targetAdminId = trim($webpanelMgrResetMatch[1]);
+    if (!select("admin", "id_admin", "id_admin", $targetAdminId, "select")) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        return;
+    }
+    $newAdminPassword = bin2hex(random_bytes(6));
+    update("admin", "password", $newAdminPassword, "id_admin", $targetAdminId);
+    update("admin", "password_hash", password_hash($newAdminPassword, PASSWORD_DEFAULT), "id_admin", $targetAdminId);
+    $resetBackKb = json_encode(['inline_keyboard' => [[['text' => "◀️ بازگشت", 'callback_data' => "webpanel_mgr_view_" . $targetAdminId]]]]);
+    nm_adminInstantReply($from_id, "✅ رمز عبور با موفقیت ریست شد.\n\n🔑 رمز عبور جدید: <code>{$newAdminPassword}</code>", $resetBackKb, 'HTML');
+    if ($targetAdminId !== $from_id) {
+        @sendmessage($targetAdminId, "🔑 رمز عبور پنل تحت وب شما توسط یک ادمین دیگر تغییر یافت.\n\nرمز عبور جدید: <code>{$newAdminPassword}</code>", null, 'HTML');
+    }
+} elseif (preg_match('/^webpanel_mgr_ip_(\w+)$/', $datain, $webpanelMgrIpMatch) && $adminrulecheck['rule'] == "administrator") {
+    $targetAdminId = trim($webpanelMgrIpMatch[1]);
+    if (!select("admin", "id_admin", "id_admin", $targetAdminId, "select")) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        return;
+    }
+    [$mgrIpList, $mgrIpUnlimited] = getAdminIpLoginState($targetAdminId);
+    $mgrIpMsg = "🌐 <b>آیپی ورود اختصاصی</b>\n";
+    $mgrIpMsg .= "━━━━━━━━━━━━━━━━━━━━\n";
+    if ($mgrIpUnlimited) {
+        $mgrIpMsg .= "♾️ <b>حالت نامحدود فعال است.</b>\nورود شما از هر آیپی‌ای آزاد است.\n";
+    } elseif (empty($mgrIpList)) {
+        $mgrIpMsg .= "⚠️ هیچ آیپی‌ای تنظیم نشده است.\nدر این حالت ورود شما از پنل وب مسدود است.\n";
+    } else {
+        $mgrIpMsg .= "📋 آیپی‌های مجاز ورود:\n";
+        foreach ($mgrIpList as $i => $ip) {
+            $mgrIpMsg .= ($i + 1) . ". <code>" . htmlspecialchars($ip) . "</code>\n";
+        }
+    }
+    $mgrIpMsg .= "━━━━━━━━━━━━━━━━━━━━\n";
+    $mgrIpMsg .= "➕ برای افزودن آیپی جدید، دکمه <b>افزودن آیپی</b> را بزنید.";
+    $mgrIpKeyboardJson = buildWebpanelIpLoginKeyboard($targetAdminId, $mgrIpList, $mgrIpUnlimited);
+    if ($message_id) {
+        Editmessagetext($from_id, $message_id, $mgrIpMsg, $mgrIpKeyboardJson);
+    } else {
+        nm_adminInstantReply($from_id, $mgrIpMsg, $mgrIpKeyboardJson, 'HTML');
+    }
+} elseif (preg_match('/^webpanel_mgr_ipunlim_(on|off)_(\w+)$/', $datain, $webpanelMgrIpUnlimMatch) && $adminrulecheck['rule'] == "administrator") {
+    $targetAdminId = trim($webpanelMgrIpUnlimMatch[2]);
+    if (!select("admin", "id_admin", "id_admin", $targetAdminId, "select")) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        return;
+    }
+    if ($webpanelMgrIpUnlimMatch[1] === 'on') {
+        update("admin", "iplogin", "*", "id_admin", $targetAdminId);
+    } else {
+        update("admin", "iplogin", json_encode([]), "id_admin", $targetAdminId);
+    }
+    [$mgrIpList, $mgrIpUnlimited] = getAdminIpLoginState($targetAdminId);
+    $mgrIpMsg = "🌐 <b>آیپی ورود اختصاصی</b>\n━━━━━━━━━━━━━━━━━━━━\n";
+    $mgrIpMsg .= $mgrIpUnlimited ? "♾️ <b>حالت نامحدود فعال است.</b>\n" : (empty($mgrIpList) ? "⚠️ هیچ آیپی‌ای تنظیم نشده است.\n" : "📋 " . count($mgrIpList) . " آیپی مجاز تنظیم شده است.\n");
+    $mgrIpMsg .= "━━━━━━━━━━━━━━━━━━━━";
+    $mgrIpKeyboardJson = buildWebpanelIpLoginKeyboard($targetAdminId, $mgrIpList, $mgrIpUnlimited);
+    if ($message_id) {
+        Editmessagetext($from_id, $message_id, $mgrIpMsg, $mgrIpKeyboardJson);
+    } else {
+        nm_adminInstantReply($from_id, $mgrIpMsg, $mgrIpKeyboardJson, 'HTML');
+    }
+} elseif (preg_match('/^webpanel_mgr_ipadd_(\w+)$/', $datain, $webpanelMgrIpAddMatch) && $adminrulecheck['rule'] == "administrator") {
+    $targetAdminId = trim($webpanelMgrIpAddMatch[1]);
+    if (!select("admin", "id_admin", "id_admin", $targetAdminId, "select")) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        return;
+    }
+    update("user", "Processing_value", $targetAdminId, "id", $from_id);
+    $ipAddBackKb = json_encode(['inline_keyboard' => [[['text' => "◀️ انصراف", 'callback_data' => "webpanel_mgr_ip_" . $targetAdminId]]]]);
+    nm_adminInstantReply($from_id, "📌 آیپی جدید را ارسال کنید.\n<i>مثال: 1.2.3.4</i>", $ipAddBackKb, 'HTML');
+    step("webpanel_mgr_get_ip", $from_id);
+} elseif ($user['step'] == "webpanel_mgr_get_ip" && $adminrulecheck['rule'] == "administrator") {
+    if (!isset($update['message']) && empty($text)) { return; }
+    $newIp = trim($text);
+    $targetAdminId = trim((string)($user['Processing_value'] ?? ''));
+    if ($targetAdminId === '' || !select("admin", "id_admin", "id_admin", $targetAdminId, "select")) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    if (!filter_var($newIp, FILTER_VALIDATE_IP)) {
+        nm_adminInstantReply($from_id, "❌ آیپی وارد شده معتبر نیست. لطفاً یک آیپی صحیح ارسال کنید.\nمثال: <code>1.2.3.4</code>", null, 'HTML');
+        return;
+    }
+    [$curIpList, $curIpUnlimited] = getAdminIpLoginState($targetAdminId);
+    if ($curIpUnlimited) {
+        $curIpList = [];
+    }
+    if (in_array($newIp, $curIpList, true)) {
+        nm_adminInstantReply($from_id, "⚠️ این آیپی قبلاً در لیست وجود دارد.", null, 'HTML');
+        step("home", $from_id);
+        return;
+    }
+    $curIpList[] = $newIp;
+    update("admin", "iplogin", json_encode(array_values($curIpList)), "id_admin", $targetAdminId);
+    step("home", $from_id);
+    nm_adminInstantReply($from_id, "✅ آیپی <code>" . htmlspecialchars($newIp) . "</code> با موفقیت اضافه شد.", $keyboardadmin, 'HTML');
+} elseif (preg_match('/^webpanel_mgr_ipdel_(\w+)_(\d+)$/', $datain, $webpanelMgrIpDelMatch) && $adminrulecheck['rule'] == "administrator") {
+    $targetAdminId = trim($webpanelMgrIpDelMatch[1]);
+    $delIndex = (int) $webpanelMgrIpDelMatch[2];
+    if (!select("admin", "id_admin", "id_admin", $targetAdminId, "select")) {
+        nm_adminInstantReply($from_id, "❌ ادمینی با این شناسه یافت نشد.", null, 'HTML');
+        return;
+    }
+    [$curIpList, $curIpUnlimited] = getAdminIpLoginState($targetAdminId);
+    if ($curIpUnlimited || !isset($curIpList[$delIndex])) {
+        nm_adminInstantReply($from_id, "❌ آیپی مورد نظر یافت نشد.", null, 'HTML');
+        return;
+    }
+    array_splice($curIpList, $delIndex, 1);
+    update("admin", "iplogin", json_encode(array_values($curIpList)), "id_admin", $targetAdminId);
+    [$mgrIpList, $mgrIpUnlimited] = getAdminIpLoginState($targetAdminId);
+    $mgrIpMsg = "🌐 <b>آیپی ورود اختصاصی</b>\n━━━━━━━━━━━━━━━━━━━━\n✅ آیپی حذف شد.\n━━━━━━━━━━━━━━━━━━━━";
+    $mgrIpKeyboardJson = buildWebpanelIpLoginKeyboard($targetAdminId, $mgrIpList, $mgrIpUnlimited);
+    if ($message_id) {
+        Editmessagetext($from_id, $message_id, $mgrIpMsg, $mgrIpKeyboardJson);
+    } else {
+        nm_adminInstantReply($from_id, $mgrIpMsg, $mgrIpKeyboardJson, 'HTML');
+    }
 } elseif (preg_match('/addordermanualـ(\w+)/', $datain, $dataget)) {
     $iduser = $dataget[1];
     update("user", "Processing_value", $iduser, "id", $from_id);
     nm_adminInstantReply($from_id, $textbotlang['Admin']['addorder']['towstep'], $backadmin, 'HTML');
     step('getusernameconfig', $from_id);
 } elseif ($user['step'] == "getusernameconfig") {
-    $text = strtolower($text);
-    if (!preg_match('/^[\w-]{3,32}$/', $text)) {
+    $text = trim($text);
+    if ($text === '' || preg_match('/\s/', $text)) {
         nm_adminInstantReply($from_id, $textbotlang['users']['stateus']['Invalidusername'], $backuser, 'html');
-        return;
-    }
-    $stmt = $pdo->prepare("SELECT 1 FROM invoice WHERE LOWER(username) = LOWER(:username) LIMIT 1");
-    $stmt->bindParam(':username', $text, PDO::PARAM_STR);
-    $stmt->execute();
-    if ($stmt->fetch(PDO::FETCH_ASSOC) !== false) {
-        nm_adminInstantReply($from_id, "❌ این نام کاربری از قبل داخل ربات وجود دارد.", null, 'HTML');
         return;
     }
     update("user", "Processing_value_one", $text, "id", $from_id);
@@ -227,6 +434,15 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
     $DataUserOut = $ManagePanel->DataUser($user['Processing_value_tow'], $user['Processing_value_one']);
     if ($DataUserOut['status'] == "Unsuccessful") {
         nm_adminInstantReply($from_id, "❌ این نام کاربری روی پنل انتخابی وجود ندارد. لطفا نام کاربری را بررسی و دوباره ارسال کنید یا ابتدا آن را روی پنل بسازید.", $keyboardadmin, 'HTML');
+        step("home", $from_id);
+        return;
+    }
+    $dupStmt = $pdo->prepare("SELECT 1 FROM invoice WHERE Service_location = :location AND username = CONVERT(:username USING utf8mb4) COLLATE utf8mb4_bin LIMIT 1");
+    $dupStmt->bindParam(':location', $user['Processing_value_tow'], PDO::PARAM_STR);
+    $dupStmt->bindParam(':username', $user['Processing_value_one'], PDO::PARAM_STR);
+    $dupStmt->execute();
+    if ($dupStmt->fetch(PDO::FETCH_ASSOC) !== false) {
+        nm_adminInstantReply($from_id, "❌ این سرویس از قبل داخل ربات ثبت شده است.", $keyboardadmin, 'HTML');
         step("home", $from_id);
         return;
     }
@@ -254,8 +470,8 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
     $stmt->bindParam(':notifctions', $notifctions, PDO::PARAM_STR);
     $stmt->execute();
     if ($stmt->rowCount() === 0) {
-        nm_adminInstantReply($from_id, "❌ اشتراک روی پنل ساخته شد اما ثبت سفارش داخلی ناموفق بود (احتمالا نام کاربری تکراری است). لطفا با پشتیبانی فنی تماس بگیرید.", null, 'HTML');
-        $texterros = "خطا در ثبت سفارش محلی پس از ساخت موفق اشتراک روی پنل (احتمالا تداخل نام کاربری)
+        nm_adminInstantReply($from_id, "❌ سرویس روی پنل پیدا شد، اما ثبت آن در ربات ناموفق بود؛ احتمالا این سرویس قبلا در ربات ثبت شده است.", null, 'HTML');
+        $texterros = "خطا در ثبت سفارش محلی برای سرویس موجود روی پنل (احتمالا تداخل نام کاربری)
 <blockquote>نام کاربری: {$user['Processing_value_one']}</blockquote>
 <blockquote>آیدی ادمین: $from_id</blockquote>
 <blockquote>نام پنل: {$marzban_list_get['name_panel']}</blockquote>";
@@ -1506,7 +1722,8 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
 - برای اضافه کردن کانفیگ ابتدا نام کاربری را ارسال نمایید.", $backadmin, 'HTML');
     step('getusernameconfigcr', $from_id);
 } elseif ($user['step'] == "getusernameconfigcr") {
-    if (!preg_match('~(?!_)^[a-z][a-z\d_]{2,32}(?<!_)$~i', $text)) {
+    $text = str_replace('_', '-', $text);
+    if (!preg_match('~(?![_-])^[a-z][a-z\d_-]{2,32}(?<![_-])$~i', $text)) {
         nm_adminInstantReply($from_id, $textbotlang['users']['invalidusername'], $backadmin, 'HTML');
         return;
     }
@@ -1554,7 +1771,7 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
     );
     $panel = select("marzban_panel", "*", "name_panel", $userdata['idpanel'], "select");
     for ($i = 0; $i < $userdata['count']; $i++) {
-        $usernameconfig = $user['Processing_value_one'] . "_" . $i;
+        $usernameconfig = str_replace('_', '-', $user['Processing_value_one']) . "-" . $i;
         $dataoutput = $ManagePanel->createUser($userdata['idpanel'], "usertest", $usernameconfig, $datac);
         if ($dataoutput['username'] == null) {
             $dataoutput['msg'] = json_encode($dataoutput['msg']);
@@ -4499,7 +4716,8 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
         nm_adminInstantReply($from_id, "⚠️ ادمینی با این شناسه یافت نشد.", null, 'HTML');
         return;
     }
-    nm_adminInstantReply($from_id, "✅ ادمین با موفقیت حذف گردید", null, 'HTML');
+    $removeAdminBackKb = json_encode(['inline_keyboard' => [[['text' => "◀️ بازگشت به لیست ادمین‌ها", 'callback_data' => "admin_mgr"]]]]);
+    nm_adminInstantReply($from_id, "✅ ادمین با موفقیت حذف گردید", $removeAdminBackKb, 'HTML');
 }
 
 elseif ($text == "🫣 مخفی پنل برای کاربر" && $adminrulecheck['rule'] == "administrator") {

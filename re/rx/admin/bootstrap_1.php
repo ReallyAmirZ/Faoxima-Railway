@@ -5,7 +5,6 @@ if (is_file($guardHelperPath)) {
     require_once $guardHelperPath;
 }
 
-error_log('RXDBG-ADMIN-MODULE datain=' . var_export($datain ?? null, true) . ' text=' . var_export(mb_substr((string)($text ?? ''), 0, 40), true));
 $textadmin = ["panel", "/panel", $textbotlang['Admin']['textpaneladmin']];
 if (isset($datain) && $datain != "" && $text == "" && in_array($from_id, $admin_ids)) {
     $text = $datain;
@@ -551,6 +550,88 @@ function buildIpLoginKeyboard(array $ip_list, $iplogin_unlimited)
 }
 }
 
+if (!function_exists('parseIpLoginRaw')) {
+function parseIpLoginRaw($raw)
+{
+    $ip_list = [];
+    $iplogin_unlimited = false;
+    if ($raw === null || $raw === '' || $raw === '0') {
+        $iplogin_unlimited = true;
+        return [$ip_list, $iplogin_unlimited];
+    }
+    if ($raw === '*' || $raw === 'all' || $raw === 'unlimited') {
+        $iplogin_unlimited = true;
+    } else {
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded)) {
+            if (in_array('*', $decoded, true) || in_array('all', $decoded, true) || in_array('unlimited', $decoded, true)) {
+                $iplogin_unlimited = true;
+            } else {
+                $ip_list = $decoded;
+            }
+        } elseif (filter_var($raw, FILTER_VALIDATE_IP)) {
+            $ip_list = [$raw];
+        } else {
+            $iplogin_unlimited = true;
+        }
+    }
+    return [$ip_list, $iplogin_unlimited];
+}
+}
+
+if (!function_exists('getAdminIpLoginState')) {
+function getAdminIpLoginState($idAdmin)
+{
+    $row = select("admin", "iplogin", "id_admin", $idAdmin, "select");
+    $raw = is_array($row) ? ($row['iplogin'] ?? null) : null;
+    return parseIpLoginRaw($raw);
+}
+}
+
+if (!function_exists('buildAdminIpLoginKeyboard')) {
+function buildAdminIpLoginKeyboard($idAdmin, array $ip_list, $iplogin_unlimited)
+{
+    $idAdmin = (string) $idAdmin;
+    $ip_keyboard = ['inline_keyboard' => []];
+    foreach ($ip_list as $i => $ip) {
+        $ip_keyboard['inline_keyboard'][] = [
+            ['text' => "🔸 " . $ip, 'callback_data' => "noop"],
+            ['text' => "🗑 حذف",     'callback_data' => "admin_mgr_ipdel_{$idAdmin}_{$i}"],
+        ];
+    }
+    $ip_keyboard['inline_keyboard'][] = [['text' => "➕ افزودن آیپی", 'callback_data' => "admin_mgr_ipadd_{$idAdmin}"]];
+    if ($iplogin_unlimited) {
+        $ip_keyboard['inline_keyboard'][] = [['text' => "🔒 محدود به آیپی(های) بالا", 'callback_data' => "admin_mgr_ipunlim_off_{$idAdmin}"]];
+    } else {
+        $ip_keyboard['inline_keyboard'][] = [['text' => "♾️ فعال‌سازی حالت نامحدود", 'callback_data' => "admin_mgr_ipunlim_on_{$idAdmin}"]];
+    }
+    $ip_keyboard['inline_keyboard'][] = [['text' => "◀️ بازگشت", 'callback_data' => "admin_mgr_view_{$idAdmin}"]];
+    return json_encode($ip_keyboard);
+}
+}
+
+if (!function_exists('buildWebpanelIpLoginKeyboard')) {
+function buildWebpanelIpLoginKeyboard($idAdmin, array $ip_list, $iplogin_unlimited)
+{
+    $idAdmin = (string) $idAdmin;
+    $ip_keyboard = ['inline_keyboard' => []];
+    foreach ($ip_list as $i => $ip) {
+        $ip_keyboard['inline_keyboard'][] = [
+            ['text' => "🔸 " . $ip, 'callback_data' => "noop"],
+            ['text' => "🗑 حذف",     'callback_data' => "webpanel_mgr_ipdel_{$idAdmin}_{$i}"],
+        ];
+    }
+    $ip_keyboard['inline_keyboard'][] = [['text' => "➕ افزودن آیپی", 'callback_data' => "webpanel_mgr_ipadd_{$idAdmin}"]];
+    if ($iplogin_unlimited) {
+        $ip_keyboard['inline_keyboard'][] = [['text' => "🔒 محدود به آیپی(های) بالا", 'callback_data' => "webpanel_mgr_ipunlim_off_{$idAdmin}"]];
+    } else {
+        $ip_keyboard['inline_keyboard'][] = [['text' => "♾️ فعال‌سازی حالت نامحدود", 'callback_data' => "webpanel_mgr_ipunlim_on_{$idAdmin}"]];
+    }
+    $ip_keyboard['inline_keyboard'][] = [['text' => "◀️ بازگشت", 'callback_data' => "webpanel_mgr_view_{$idAdmin}"]];
+    return json_encode($ip_keyboard);
+}
+}
+
 if (!in_array($from_id, $admin_ids))
     return;
 
@@ -583,7 +664,7 @@ if (!function_exists('rxBuildMiniAppInstructionText')) {
 فقط <b>یک کرون</b> کافی است — بقیه فرآیندها به‌صورت خودکار از همین کرون اجرا می‌شوند:
 
 <b>⏱ هر ۱ دقیقه یک بار</b>
-<code> curl -s https://{$domainhostsEscaped}/cron/cron.php &gt; /dev/null 2&gt;&amp;1</code>
+<code>curl -s https://{$domainhostsEscaped}/cron/cron.php &gt;/dev/null 2&gt;&amp;1</code>
 HTML;
         }
 
@@ -925,9 +1006,9 @@ if (!empty($datain) && in_array($from_id, $admin_ids ?? [])) {
         'shopitem_pricedec' => "⬇️ کاهش گروهی قیمت",
         'shopitem_back'     => "⬅️ بازگشت به منوی فروشگاه",
 
-        'feat_info'     => "قابلیت مشاهده اطلاعات اکانت",
-        'feat_test'     => "قابلیت اکانت تست",
-        'feat_help'     => "قابلیت آموزش",
+        'feat_info'     => "⚙️ مشاهده اطلاعات اکانت",
+        'feat_test'     => "🧪 اکانت تست",
+        'feat_help'     => "📚 قابلیت آموزش",
         'feat_back'     => $textbotlang['Admin']['backadmin'],
         'feat_backmenu' => $textbotlang['Admin']['backmenu'],
 

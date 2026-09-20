@@ -27,44 +27,21 @@ register_shutdown_function(static function () {
        . '</body></html>';
 });
 
+ini_set('session.cookie_samesite', 'Lax');
 ini_set('session.cookie_httponly', '1');
 session_start();
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/lib/icons.php';
 require_once __DIR__ . '/../function.php';
 require_once __DIR__ . '/../botapi.php';
+require_once __DIR__ . '/../jdf.php';
 
-$allowed_ips = select("setting","*",null,null,"select");
 $user_ip = $_SERVER['REMOTE_ADDR'] ?? '';
-$admin_ids = select("admin", "id_admin", null, null, "FETCH_COLUMN");
 
-$_raw_iplogin = $allowed_ips['iplogin'] ?? '';
-$_ip_list = [];
-$_iplogin_unlimited = false;
-if ($_raw_iplogin === '*' || $_raw_iplogin === 'all' || $_raw_iplogin === 'unlimited') {
-    $_iplogin_unlimited = true;
-} elseif (!empty($_raw_iplogin) && $_raw_iplogin !== '0') {
-    $_decoded = json_decode($_raw_iplogin, true);
-    if (is_array($_decoded)) {
-        if (in_array('*', $_decoded, true) || in_array('all', $_decoded, true) || in_array('unlimited', $_decoded, true)) {
-            $_iplogin_unlimited = true;
-        } else {
-            $_ip_list = $_decoded;
-        }
-    } elseif (filter_var($_raw_iplogin, FILTER_VALIDATE_IP)) {
-        $_ip_list = [$_raw_iplogin];
-    }
-}
-$check_ip = $_iplogin_unlimited || (!empty($_ip_list) && in_array($user_ip, $_ip_list, true));
 $texterrr = "";
+$ip_denied = false;
 
 if (isset($_POST['login'])) {
-    if (!$check_ip) {
-        http_response_code(403);
-        exit('Access denied');
-    }
-
-
     $username = isset($_POST['username']) ? trim((string)$_POST['username']) : '';
     $password = isset($_POST['password']) ? (string)$_POST['password'] : '';
 
@@ -74,10 +51,48 @@ if (isset($_POST['login'])) {
         $query->execute();
         $result = $query->fetch(PDO::FETCH_ASSOC);
 
+        $passwordOk = false;
+        if ($result) {
+            $storedHash = (string)($result["password_hash"] ?? '');
+            if ($storedHash !== '' && password_verify($password, $storedHash)) {
+                $passwordOk = true;
+                if (password_needs_rehash($storedHash, PASSWORD_DEFAULT)) {
+                    $rehash = $pdo->prepare("UPDATE admin SET password_hash = :h WHERE id_admin = :id");
+                    $rehash->execute([':h' => password_hash($password, PASSWORD_DEFAULT), ':id' => $result['id_admin']]);
+                }
+            } elseif ($storedHash === '' && (string)$password === (string)($result["password"] ?? '') && $password !== '') {
+                $passwordOk = true;
+                $migrate = $pdo->prepare("UPDATE admin SET password_hash = :h WHERE id_admin = :id");
+                $migrate->execute([':h' => password_hash($password, PASSWORD_DEFAULT), ':id' => $result['id_admin']]);
+            }
+        }
+
+        $adminIpOk = true;
+        if ($result) {
+            $rawAdminIp = $result['iplogin'] ?? null;
+            if ($rawAdminIp !== null && $rawAdminIp !== '') {
+                $adminIpDecoded = json_decode((string)$rawAdminIp, true);
+                if (is_array($adminIpDecoded)) {
+                    if (in_array('*', $adminIpDecoded, true) || in_array('all', $adminIpDecoded, true) || in_array('unlimited', $adminIpDecoded, true)) {
+                        $adminIpOk = true;
+                    } else {
+                        $adminIpOk = in_array($user_ip, $adminIpDecoded, true);
+                    }
+                } elseif ($rawAdminIp === '*' || $rawAdminIp === 'all' || $rawAdminIp === 'unlimited') {
+                    $adminIpOk = true;
+                } elseif (filter_var($rawAdminIp, FILTER_VALIDATE_IP)) {
+                    $adminIpOk = ($rawAdminIp === $user_ip);
+                }
+            }
+        }
+
         if (!$result) {
             $texterrr = 'نام کاربری یا رمزعبور وارد شده اشتباه است!';
-        } elseif ((string)$password !== (string)($result["password"] ?? '')) {
+        } elseif (!$passwordOk) {
             $texterrr = 'رمز صحیح نمی باشد';
+        } elseif (!$adminIpOk) {
+            http_response_code(403);
+            $ip_denied = true;
         } else {
 
 
@@ -105,11 +120,20 @@ if (isset($_POST['login'])) {
 
 
             try {
-                if (is_array($admin_ids)) {
-                    foreach ($admin_ids as $admin) {
-                        $texts = "کاربر با نام کاربری " . $username . " وارد پنل تحت وب شد";
-                        @sendmessage($admin, $texts, null, 'html');
-                    }
+                $setting = select("setting", "*", null, null);
+                $otherreport = select("topicid", "idreport", "report", "otherreport", "select")['idreport'] ?? null;
+                if (!empty($setting['Channel_Report']) && !empty($otherreport)) {
+                    $loginText = "🔐 ورود موفق به پنل تحت وب\n\n"
+                        . "👤 نام کاربری:\n" . $username . "\n\n"
+                        . "🪪 شناسه ادمین:\n" . $result['id_admin'] . "\n\n"
+                        . "🌐 IP ورود:\n" . $user_ip . "\n\n"
+                        . "🕐 زمان ورود:\n" . (function_exists('jdate') ? jdate('Y/m/d H:i:s', time(), '', 'Asia/Tehran', 'en') : date('Y/m/d H:i:s'));
+                    telegram('sendmessage', [
+                        'chat_id'           => $setting['Channel_Report'],
+                        'message_thread_id' => $otherreport,
+                        'text'              => $loginText,
+                        'parse_mode'        => "HTML"
+                    ]);
                 }
             } catch (\Throwable $e) {
                 @error_log('Login notify failed: ' . $e->getMessage());
@@ -141,11 +165,11 @@ if (isset($_POST['login'])) {
 </head>
 <body class="login-page">
 
-<?php if (!$check_ip): ?>
+<?php if ($ip_denied): ?>
     <div class="ip-card">
         <span style="font-size:48px; color: var(--accent);"><?php echo icon('shield-halved', 'svg-icon'); ?></span>
-        <h2>دسترسی محدود شده</h2>
-        <p>برای ورود به سیستم، آی‌پی زیر را در تنظیمات ربات ثبت کنید.</p>
+        <h2>دسترسی غیرمجاز</h2>
+        <p>IP فعلی شما در لیست IPهای مجاز این حساب قرار ندارد.<br>برای ورود، از IP مجاز استفاده کنید یا تنظیمات IP این حساب را از طریق ربات مدیریت کنید.</p>
         <div class="ip-box"><?php echo htmlspecialchars($user_ip, ENT_QUOTES, 'UTF-8'); ?></div>
     </div>
 <?php else: ?>
@@ -220,7 +244,7 @@ if (isset($_POST['login'])) {
             <p class="text-muted" style="text-align:center; font-size:11px; margin-top:14px; direction:ltr; font-family:'JetBrains Mono',monospace;">
                 <?php
                     $__loginVer = trim((string)@file_get_contents(__DIR__ . '/../version'));
-                    if ($__loginVer === '') $__loginVer = '1.0.0';
+                    if ($__loginVer === '') $__loginVer = '1.0.5';
                     echo 'v' . htmlspecialchars(ltrim($__loginVer, 'vV'), ENT_QUOTES, 'UTF-8');
                 ?>
             </p>

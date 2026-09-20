@@ -165,7 +165,7 @@ if (!function_exists('rx_redis_try_connect')) {
             try {
                 if (class_exists('Redis')) {
                     $client = new \Redis();
-                    $connected = @$client->connect($host, $port, 1.5);
+                    $connected = @$client->pconnect($host, $port, 1.5);
                     if (!$connected) {
                         throw new \RuntimeException('connect_refused');
                     }
@@ -281,7 +281,9 @@ if (!function_exists('getRedisConnection')) {
         $config = rx_redis_config();
 
         $autoDetect = ($config['host'] === '');
-        $hostCandidates = $autoDetect ? ['127.0.0.1', 'localhost'] : [$config['host']];
+        $hostCandidates = $autoDetect
+            ? (rx_redis_docker_env() ? ['redis', '127.0.0.1', 'localhost'] : ['127.0.0.1', 'localhost'])
+            : [$config['host']];
 
         foreach ($hostCandidates as $candidateHost) {
             $client = rx_redis_try_connect($candidateHost, $config['port'], $config['password'], $config['database']);

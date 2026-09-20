@@ -32,6 +32,21 @@ if [ -z "${DOMAIN:-}" ] && [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
     export DOMAIN="$RAILWAY_PUBLIC_DOMAIN"
 fi
 
+# Railway's MySQL service exposes MYSQL* variables. Keep accepting the DB_*
+# names used by older Faoxima deployments while supporting direct references.
+if [ -z "${DB_HOST:-}" ] && [ -n "${MYSQLHOST:-}" ]; then
+    export DB_HOST="$MYSQLHOST"
+fi
+if [ -z "${DB_NAME:-}" ] && [ -n "${MYSQLDATABASE:-}" ]; then
+    export DB_NAME="$MYSQLDATABASE"
+fi
+if [ -z "${DB_USER:-}" ] && [ -n "${MYSQLUSER:-}" ]; then
+    export DB_USER="$MYSQLUSER"
+fi
+if [ -z "${DB_PASS:-}" ] && [ -n "${MYSQLPASSWORD:-}" ]; then
+    export DB_PASS="$MYSQLPASSWORD"
+fi
+
 missing=""
 for variable in DB_HOST DB_NAME DB_USER DB_PASS TELEGRAM_BOT_TOKEN TELEGRAM_ADMIN_ID DOMAIN; do
     value="$(printenv "$variable" 2>/dev/null || true)"
@@ -66,7 +81,7 @@ if [ "${FAOXIMA_AUTO_MIGRATE:-1}" = "1" ]; then
     php "$APP_DIR/table.php"
 fi
 
-chown -R www-data:www-data "$APP_DIR/logs" "$APP_DIR/storage" "$APP_DIR/cronbot/.runtime" 2>/dev/null || true
+chown -R www-data:www-data "$APP_DIR/logs" "$APP_DIR/storage" "$APP_DIR/cron" "$APP_DIR/cronbot/.runtime" 2>/dev/null || true
 chmod 600 "$APP_DIR/config.php" 2>/dev/null || true
 
 cron

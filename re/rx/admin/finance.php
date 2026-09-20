@@ -367,14 +367,65 @@ if (false) {
     update("marzban_panel", "secret_code", $text, "name_panel", $user['Processing_value']);
     step('PanelMenu', $from_id);
 } elseif ($text == "🚨 محدودیت اکانت" && $adminrulecheck['rule'] == "administrator") {
+    $rxLimitPanelName = function_exists('nmResolvePanelNameForUser') ? nmResolvePanelNameForUser($user) : (string)($user['Processing_value'] ?? '');
+    $rxLimitMenu = function_exists('panel_limit_menu_render') ? panel_limit_menu_render($rxLimitPanelName) : null;
+    if ($rxLimitMenu === null) {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['nullpanel'], $backadmin, 'HTML');
+        return;
+    }
+    nm_adminInstantReply($from_id, $rxLimitMenu['text'], $rxLimitMenu['keyboard'], 'HTML');
+} elseif ($datain == "panellimit_menu" && $adminrulecheck['rule'] == "administrator") {
+    $rxLimitPanelName = function_exists('nmResolvePanelNameForUser') ? nmResolvePanelNameForUser($user) : (string)($user['Processing_value'] ?? '');
+    $rxLimitMenu = function_exists('panel_limit_menu_render') ? panel_limit_menu_render($rxLimitPanelName) : null;
+    if ($rxLimitMenu === null) {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['nullpanel'], $backadmin, 'HTML');
+        return;
+    }
+    nm_adminInstantReply($from_id, $rxLimitMenu['text'], $rxLimitMenu['keyboard'], 'HTML');
+} elseif ($datain == "panellimit_change" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['setlimit'], $backadmin, 'HTML');
-    step('getlimitnew', $from_id);
-} elseif ($user['step'] == "getlimitnew") {
+    step('panellimit_getnew', $from_id);
+} elseif ($user['step'] == "panellimit_getnew") {
     if (!isset($update['message']) && empty($text)) { return; }
-    $typepanel = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
+    if (!ctype_digit((string)$text)) {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['limitmenu_invalid'], $backadmin, 'HTML');
+        return;
+    }
+    $rxLimitPanelName = function_exists('nmResolvePanelNameForUser') ? nmResolvePanelNameForUser($user) : (string)($user['Processing_value'] ?? '');
+    $typepanel = select("marzban_panel", "*", "name_panel", $rxLimitPanelName, "select");
+    panel_limit_set($typepanel, $text);
     outtypepanel($typepanel['type'], $textbotlang['Admin']['managepanel']['changedlimit']);
-    update("marzban_panel", "limit_panel", $text, "name_panel", $user['Processing_value']);
     step('PanelMenu', $from_id);
+    $typepanel = select("marzban_panel", "*", "name_panel", $rxLimitPanelName, "select", ['cache' => false]);
+    $rxLimitMenu = panel_limit_menu_render($typepanel);
+    if ($rxLimitMenu !== null) {
+        sendmessage($from_id, $rxLimitMenu['text'], $rxLimitMenu['keyboard'], 'HTML');
+    }
+} elseif ($datain == "panellimit_reset" && $adminrulecheck['rule'] == "administrator") {
+    $rxLimitPanelName = function_exists('nmResolvePanelNameForUser') ? nmResolvePanelNameForUser($user) : (string)($user['Processing_value'] ?? '');
+    $typepanel = select("marzban_panel", "*", "name_panel", $rxLimitPanelName, "select", ['cache' => false]);
+    panel_limit_reset($typepanel);
+    $typepanel = select("marzban_panel", "*", "name_panel", $rxLimitPanelName, "select", ['cache' => false]);
+    $rxLimitMenu = panel_limit_menu_render($typepanel);
+    if ($rxLimitMenu !== null) {
+        nm_adminInstantReply($from_id, $rxLimitMenu['text'], $rxLimitMenu['keyboard'], 'HTML');
+    }
+} elseif ($datain == "panellimit_unlimited" && $adminrulecheck['rule'] == "administrator") {
+    $rxLimitPanelName = function_exists('nmResolvePanelNameForUser') ? nmResolvePanelNameForUser($user) : (string)($user['Processing_value'] ?? '');
+    $typepanel = select("marzban_panel", "*", "name_panel", $rxLimitPanelName, "select", ['cache' => false]);
+    panel_limit_set_unlimited($typepanel);
+    $typepanel = select("marzban_panel", "*", "name_panel", $rxLimitPanelName, "select", ['cache' => false]);
+    $rxLimitMenu = panel_limit_menu_render($typepanel);
+    if ($rxLimitMenu !== null) {
+        nm_adminInstantReply($from_id, $rxLimitMenu['text'], $rxLimitMenu['keyboard'], 'HTML');
+    }
+} elseif ($datain == "panellimit_back" && $adminrulecheck['rule'] == "administrator") {
+    step('PanelMenu', $from_id);
+    $rxLimitPanelName = function_exists('nmResolvePanelNameForUser') ? nmResolvePanelNameForUser($user) : (string)($user['Processing_value'] ?? '');
+    $typepanel = select("marzban_panel", "*", "name_panel", $rxLimitPanelName, "select");
+    if (is_array($typepanel) && !empty($typepanel)) {
+        outtypepanel($typepanel['type'], $textbotlang['Admin']['Back-menu']);
+    }
 } elseif ($text == "⏳ زمان سرویس تست" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, "🕰 مدت زمان سرویس تست را ارسال کنید.
 ⚠️ زمان بر حسب ساعت است.", $backadmin, 'HTML');
@@ -442,6 +493,11 @@ if (false) {
         return;
     }
     if (is_array($typepanel) && ($typepanel['type'] ?? null) == "pasarguard") {
+        if (($typepanel['pasarguard_auth_mode'] ?? 'api_key') === 'password') {
+            nm_adminInstantReply($from_id, "👤 لطفاً نام کاربری جدید پنل PasarGuard را ارسال کنید.", $backadmin, 'HTML');
+            step('pasarguard_edit_username', $from_id);
+            return;
+        }
         nm_adminInstantReply($from_id, "🔑 لطفاً API Key جدید پنل PasarGuard را ارسال کنید.", $backadmin, 'HTML');
         step('pasarguard_edit_api_key', $from_id);
         return;
@@ -488,6 +544,58 @@ if (false) {
     }
     update("marzban_panel", "api_key", $apiKey, "name_panel", $typepanel['name_panel']);
     outtypepanel("pasarguard", "🔑 کلید PasarGuard با موفقیت ذخیره شد.\n✅ اتصال برقرار است");
+    step('PanelMenu', $from_id);
+} elseif ($user['step'] == "pasarguard_edit_username") {
+    if (!isset($update['message']) && empty($text)) { return; }
+    $panelName = guardResolveUserPanelName($user);
+    $typepanel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($typepanel) || ($typepanel['type'] ?? null) != "pasarguard") {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['invalidapikey'], $backadmin, 'HTML');
+        return;
+    }
+    $newUsername = trim((string) $text);
+    if ($newUsername === '') {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['usernameset'], $backadmin, 'HTML');
+        return;
+    }
+    $editState = json_encode(['panel' => $panelName, 'pasarguard_edit_username_value' => $newUsername], JSON_UNESCAPED_UNICODE);
+    update("user", "Processing_value", $editState, "id", $from_id);
+    nm_adminInstantReply($from_id, "🔑 لطفاً رمز عبور جدید پنل PasarGuard را ارسال کنید.", $backadmin, 'HTML');
+    step('pasarguard_edit_password', $from_id);
+} elseif ($user['step'] == "pasarguard_edit_password") {
+    if (!isset($update['message']) && empty($text)) { return; }
+    $panelName = guardResolveUserPanelName($user);
+    $typepanel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($typepanel) || ($typepanel['type'] ?? null) != "pasarguard") {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['invalidapikey'], $backadmin, 'HTML');
+        return;
+    }
+    $newPassword = trim((string) $text);
+    if ($newPassword === '') {
+        nm_adminInstantReply($from_id, "🔑 لطفاً رمز عبور جدید پنل PasarGuard را ارسال کنید.", $backadmin, 'HTML');
+        return;
+    }
+    $pendingData = json_decode($user['Processing_value'], true);
+    $newUsername = is_array($pendingData) ? (string) ($pendingData['pasarguard_edit_username_value'] ?? '') : '';
+    if ($newUsername === '') {
+        nm_adminInstantReply($from_id, "❌ اطلاعات ویرایش منقضی شده است. لطفاً دوباره تلاش کنید.", $backadmin, 'HTML');
+        step('PanelMenu', $from_id);
+        return;
+    }
+    $baseUrl = rtrim((string) ($typepanel['url_panel'] ?? ''), '/');
+    $testResult = pasarguardTestConnectionUserPass($baseUrl, $newUsername, $newPassword);
+    if (empty($testResult['status'])) {
+        $errorMessage = $testResult['msg'] ?? 'اتصال ناموفق بود';
+        outtypepanel("pasarguard", "❌ اطلاعات جدید ذخیره نشد، اتصال به PasarGuard ناموفق بود:\n{$errorMessage}");
+        step('PanelMenu', $from_id);
+        return;
+    }
+    if (function_exists('pasarguardClearToken')) {
+        pasarguardClearToken($baseUrl, (string) ($typepanel['username_panel'] ?? ''));
+    }
+    update("marzban_panel", "username_panel", $newUsername, "name_panel", $typepanel['name_panel']);
+    update("marzban_panel", "password_panel", $newPassword, "name_panel", $typepanel['name_panel']);
+    outtypepanel("pasarguard", "🔑 نام کاربری و رمز عبور PasarGuard با موفقیت ذخیره شد.\n✅ اتصال برقرار است");
     step('PanelMenu', $from_id);
 } elseif ($user['step'] == "rebecca_edit_api_key") {
     if (!isset($update['message']) && empty($text)) { return; }
@@ -1827,7 +1935,18 @@ $iduser  در ربات  رفع مسدود گردید
         ));
         return;
     }
-    update("Payment_report", "payment_Status", "paid", "id_order", $id_order);
+    $rxClaimAddBal = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'paid' WHERE id_order = :o AND payment_Status <> 'paid'");
+    $rxClaimAddBal->execute([':o' => $id_order]);
+    if ($rxClaimAddBal->rowCount() < 1) {
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => $textbotlang['Admin']['Payment']['reviewedpayment'],
+            'show_alert' => true,
+            'cache_time' => 5,
+        ));
+        return;
+    }
+    if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
 
     update("user", "Processing_value_four", $_addbal_chat_id . ':' . $_addbal_msg_id . ':' . $_addbal_thread_id, "id", $from_id);
     nm_adminInstantReply($from_id, $textbotlang['Admin']['ManageUser']['addbalanceuserdec'], $backadmin, 'html');

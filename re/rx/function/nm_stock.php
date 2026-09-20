@@ -7,7 +7,7 @@ function nmStockProductsForExtend(array $panel, $agent = 'all', $onlyAvailable =
     $params = [':loc' => $panel['name_panel'] ?? ''];
     $sql = "SELECT * FROM product WHERE (FIND_IN_SET(:loc, Location)>0 OR Location='/all')";
     $agent = trim((string)$agent);
-    if ($agent !== '' && $agent !== 'all') { $sql .= " AND (agent=:agent OR agent='all' OR agent='' OR agent IS NULL)"; $params[':agent'] = $agent; }
+    if ($agent !== '' && $agent !== 'all') { $sql .= " AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))"; $params[':agent'] = $agent; }
     $sql .= " ORDER BY CAST(price_product AS UNSIGNED) ASC, id ASC";
     try {
         $stmt = $pdo->prepare($sql);
@@ -28,7 +28,7 @@ function nmStockResolveProductToken($token, array $panel, $agent = 'all')
     if (preg_match('/^pid_([0-9]+)$/', $token, $m)) { $sql = "SELECT * FROM product WHERE id=:id AND (FIND_IN_SET(:loc, Location)>0 OR Location='/all') LIMIT 1"; $params[':id'] = (int)$m[1]; }
     else { $sql = "SELECT * FROM product WHERE code_product=:code AND (FIND_IN_SET(:loc, Location)>0 OR Location='/all') LIMIT 1"; $params[':code'] = $token; }
     $agent = trim((string)$agent);
-    if ($agent !== '' && $agent !== 'all') { $sql = str_replace(' LIMIT 1', " AND (agent=:agent OR agent='all' OR agent='' OR agent IS NULL) LIMIT 1", $sql); $params[':agent'] = $agent; }
+    if ($agent !== '' && $agent !== 'all') { $sql = str_replace(' LIMIT 1', " AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers')) LIMIT 1", $sql); $params[':agent'] = $agent; }
     try { $stmt = $pdo->prepare($sql); $stmt->execute($params); $row = $stmt->fetch(PDO::FETCH_ASSOC); return $row ?: false; }
     catch (Throwable $e) { error_log('nmStockResolveProductToken failed: ' . $e->getMessage()); return false; }
 }
@@ -77,8 +77,8 @@ function nmStockExtendProductKeyboard(array $invoice, array $userRow, array $pan
 
 function nmStockSafeUsername($userId, $current = '')
 {
-    $base = preg_replace('/[^A-Za-z0-9_]/', '', (string)$current);
-    if ($base === '' || strlen($base) < 3) $base = preg_replace('/[^A-Za-z0-9_]/', '', (string)$userId) . '_' . substr(bin2hex(random_bytes(3)), 0, 6);
+    $base = preg_replace('/[^A-Za-z0-9-]/', '', str_replace('_', '-', (string)$current));
+    if ($base === '' || strlen($base) < 3) $base = preg_replace('/[^A-Za-z0-9-]/', '', str_replace('_', '-', (string)$userId)) . '-' . substr(bin2hex(random_bytes(3)), 0, 6);
     if (strlen($base) > 28) $base = substr($base, 0, 28);
     if (strlen($base) < 3) $base = 'u' . substr(bin2hex(random_bytes(6)), 0, 10);
     return $base;
@@ -90,7 +90,7 @@ function nmStockConvertInvoiceToPanelService($chatId, array $userRow, array $inv
     $price = (float)($product['price_product'] ?? 0);
     if ((float)($userRow['Balance'] ?? 0) < $price && ($userRow['agent'] ?? '') !== 'n2') { sendmessage($chatId, '❌ موجودی کیف پول برای تمدید کافی نیست.', null, 'HTML'); return false; }
     $username = nmStockSafeUsername($chatId, $invoice['username'] ?? '');
-    try { $check = $ManagePanel->DataUser($panel['name_panel'], $username); if (is_array($check) && isset($check['username'])) $username = nmStockSafeUsername($chatId, $chatId . '_' . substr(bin2hex(random_bytes(4)), 0, 8)); } catch (Throwable $e) { }
+    try { $check = $ManagePanel->DataUser($panel['name_panel'], $username); if (is_array($check) && isset($check['username'])) $username = nmStockSafeUsername($chatId, $chatId . '-' . substr(bin2hex(random_bytes(4)), 0, 8)); } catch (Throwable $e) { }
     $days = (int)($product['Service_time'] ?? 0);
     $expire = $days > 0 ? strtotime('+' . $days . ' days') : 0;
     $datac = ['expire' => $expire, 'data_limit' => (float)($product['Volume_constraint'] ?? 0) * pow(1024, 3), 'from_id' => $chatId, 'username' => '', 'type' => 'buy'];
@@ -107,7 +107,10 @@ function nmStockConvertInvoiceToPanelService($chatId, array $userRow, array $inv
     }
     if (function_exists('balance_atomic_charge')) {
         $__allowNegBl = (($userRow['agent'] ?? '') === 'n2') ? (int)($userRow['maxbuyagent'] ?? 0) : 0;
-        balance_atomic_charge($chatId, (float)$price, $__allowNegBl);
+        $__chargeBl = balance_atomic_charge($chatId, (float)$price, $__allowNegBl);
+        if (!empty($__chargeBl['ok']) && function_exists('wallet_ledger_record')) {
+            wallet_ledger_record($chatId, 'debit', $price, 'service_action', 'تمدید سرویس (تبدیل انبار)', null, 'invoice', (string)$invoice['id_invoice']);
+        }
     } else {
         update('user', 'Balance', (float)($userRow['Balance'] ?? 0) - $price, 'id', $chatId);
     }
@@ -405,7 +408,10 @@ function nmMaybeHandleStockCallback($datain,$chatId,$messageId=null,$callbackQue
             if(!$stockNew){ sendmessage($chatId,'❌ موجودی انبار برای این محصول تمام شده است. مبلغی کسر نشد.',$keyboard??null,'HTML'); return true; }
             if (function_exists('balance_atomic_charge')) {
                 $__allowNegRb=(($userRow['agent']??'')==='n2')?(int)($userRow['maxbuyagent']??0):0;
-                balance_atomic_charge($chatId,(float)$price,$__allowNegRb);
+                $__chargeRb=balance_atomic_charge($chatId,(float)$price,$__allowNegRb);
+                if (!empty($__chargeRb['ok']) && function_exists('wallet_ledger_record')) {
+                    wallet_ledger_record($chatId, 'debit', $price, 'service_action', 'تمدید سرویس (انبار ملی)', null, 'invoice', (string)$invoice['id_invoice']);
+                }
             } else {
                 update('user','Balance',(float)($userRow['Balance']??0)-$price,'id',$chatId);
             }
@@ -492,7 +498,10 @@ function nmStockCompleteExtendFallback($userId, array $userRow, array $invoice, 
         if ($priceToCharge > 0 && isset($userRow['Balance'])) {
             if (function_exists('balance_atomic_charge')) {
                 $__allowNegFb = (($userRow['agent'] ?? '') === 'n2') ? (int)($userRow['maxbuyagent'] ?? 0) : 0;
-                balance_atomic_charge($userId, $priceToCharge, $__allowNegFb);
+                $__chargeFb = balance_atomic_charge($userId, $priceToCharge, $__allowNegFb);
+                if (!empty($__chargeFb['ok']) && function_exists('wallet_ledger_record')) {
+                    wallet_ledger_record($userId, 'debit', $priceToCharge, 'service_action', 'تمدید سرویس (جایگزین انبار)', null, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                }
             } else {
                 $newBalance = (float)$userRow['Balance'] - $priceToCharge;
                 update('user', 'Balance', $newBalance, 'id', $userId);
@@ -948,7 +957,10 @@ function nmStockCompleteBuyFromInventory($userId, array $userRow, array $panel, 
             if ($__pp3 > 0) {
                 if (function_exists('balance_atomic_charge')) {
                     $__allowNeg3 = (($userRow['agent'] ?? '') === 'n2') ? (int)($userRow['maxbuyagent'] ?? 0) : 0;
-                    balance_atomic_charge($userId, $__pp3, $__allowNeg3);
+                    $__charge3 = balance_atomic_charge($userId, $__pp3, $__allowNeg3);
+                    if (!empty($__charge3['ok']) && function_exists('wallet_ledger_record')) {
+                        wallet_ledger_record($userId, 'debit', $__pp3, 'purchase', 'خرید سرویس (انبار ملی)', (string)$invoiceId, 'invoice', (string)$invoiceId);
+                    }
                 } else {
                     update('user', 'Balance', (float)($userRow['Balance'] ?? 0) - $__pp3, 'id', $userId);
                 }

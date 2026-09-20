@@ -32,6 +32,9 @@ final class PurchaseHandler extends BaseHandler
         if (($panel['status'] ?? '') === 'disable') {
             FaoximaResponse::fail(409, faoxima_textbot_get('dyn_purchase_panel_disabled', 'پنل انتخابی درحال حاضر فعال نیست'));
         }
+        if (panel_creation_limit_reached($panel)) {
+            FaoximaResponse::fail(409, faoxima_textbot_get('dyn_purchase_panel_limit_reached', 'ظرفیت ساخت کانفیگ در این پنل تکمیل شده است.'));
+        }
 
 
         $customService = FaoximaInput::array($this->data, 'custom_service');
@@ -40,7 +43,18 @@ final class PurchaseHandler extends BaseHandler
             if ($serviceId === '') {
                 FaoximaResponse::badRequest('service_id is required');
             }
-            $product = select('product', '*', 'code_product', $serviceId, 'select');
+            $product = FaoximaDb::fetchOne(
+                "SELECT * FROM product
+                  WHERE code_product = :code
+                    AND (FIND_IN_SET(:location, Location) > 0 OR Location = '/all')
+                    AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))
+                  LIMIT 1",
+                [
+                    ':code' => $serviceId,
+                    ':location' => (string)($panel['name_panel'] ?? ''),
+                    ':agent' => (string)($this->user['agent'] ?? 'f'),
+                ]
+            );
         } else {
             $product = $this->buildCustomProduct($panel, $customService);
         }
@@ -127,7 +141,7 @@ final class PurchaseHandler extends BaseHandler
         $remoteCheck = $managePanel->DataUser($panel['name_panel'], $usernameAc);
         $usernameWasRenamed = $existsLocal || (is_array($remoteCheck) && isset($remoteCheck['username']));
         if ($usernameWasRenamed) {
-            $usernameAc = rand(1000000, 9999999) . '_' . $usernameAc;
+            $usernameAc = rand(1000000, 9999999) . '-' . $usernameAc;
         }
 
 
@@ -240,6 +254,11 @@ final class PurchaseHandler extends BaseHandler
         }
 
 
+        $rxPanelLimitLockKey = panel_limit_lock_acquire((string)($panel['name_panel'] ?? ''));
+        if (panel_creation_limit_reached_unlocked($panel)) {
+            panel_limit_lock_release($rxPanelLimitLockKey);
+            FaoximaResponse::fail(409, faoxima_textbot_get('dyn_purchase_panel_limit_reached', 'ظرفیت ساخت کانفیگ در این پنل تکمیل شده است.'));
+        }
         try {
             FaoximaDb::execute(
                 "INSERT INTO invoice
@@ -272,7 +291,9 @@ final class PurchaseHandler extends BaseHandler
                     ':price_before_discount' => $discPriceBefore !== null ? (string)$discPriceBefore : null,
                 ]
             );
+            panel_limit_lock_release($rxPanelLimitLockKey);
         } catch (Throwable $e) {
+            panel_limit_lock_release($rxPanelLimitLockKey);
             if ($e instanceof PDOException && (string)$e->getCode() === '23000') {
                 FaoximaResponse::fail(409, 'این نام کاربری قبلاً ثبت شده است، لطفاً دوباره تلاش کنید.');
             }
@@ -367,7 +388,7 @@ final class PurchaseHandler extends BaseHandler
                     $stockFormat = strtolower((string)nmStockDetectFormat($stockContent));
                 }
                 if ($stockFormat === 'wireguard') {
-                    $stockOutput[] = ['type' => 'file', 'value' => $stockContent, 'filename' => 'wg_' . $orderId . '.conf'];
+                    $stockOutput[] = ['type' => 'file', 'value' => $stockContent, 'filename' => 'wg-' . $orderId . '.conf'];
                 } else {
                     $stockOutput[] = ['type' => 'config', 'value' => $stockContent];
                 }
@@ -758,8 +779,11 @@ final class PurchaseHandler extends BaseHandler
             if (!empty($availability['config'])) {
                 $__kbPurchaseRows[] = [['text' => faoxima_textbot_get('dyn_purchase_get_config_btn', '🔐 دریافت کانفیگ'), 'callback_data' => 'config_' . $orderId]];
             }
-            if (!empty($availability['sub'])) {
+            if (!empty($availability['sub']) && (!function_exists('rxSubscriptionLinkButtonEnabled') || rxSubscriptionLinkButtonEnabled($panel))) {
                 $__kbPurchaseRows[] = [['text' => faoxima_textbot_get('dyn_purchase_get_sublink_btn', '🔗 دریافت لینک اشتراک'), 'callback_data' => 'subscriptionurl_' . $orderId]];
+            }
+            if (!empty($availability['sub']) && function_exists('rxAppendSubscriptionLinkLine')) {
+                $caption = rxAppendSubscriptionLinkLine($caption, $subLink, $panel);
             }
         }
         $__kbPurchaseRows[] = [['text' => '📚 مشاهده آموزش استفاده ', 'callback_data' => 'helpbtn']];
@@ -819,6 +843,7 @@ final class PurchaseHandler extends BaseHandler
             'Volume_constraint' => $volume,
             'Service_time'      => $time,
             'Location'          => $panel['name_panel'],
+            'agent'             => $agent,
             'price_product'     => $price,
         ];
     }

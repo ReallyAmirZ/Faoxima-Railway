@@ -8,7 +8,7 @@ elif locale -a 2>/dev/null | grep -qi '^C\.UTF-8$'; then
     export LC_ALL=C.UTF-8
 fi
 
-readonly FAOXIMA_VERSION="1.0.2"
+readonly FAOXIMA_VERSION="1.0.5"
 readonly FAOXIMA_REPO="Mmd-Amir/Faoxima"
 readonly FAOXIMA_GITHUB="https://github.com/${FAOXIMA_REPO}"
 readonly FAOXIMA_TELEGRAM="https://t.me/faoxima"
@@ -423,6 +423,39 @@ version_is_newer() {
     [ "$candidate" != "$installed" ] && [ "$(printf '%s\n%s\n' "$candidate" "$installed" | sort -V | tail -1)" = "$candidate" ]
 }
 
+normalize_version_value() {
+    local version="$1"
+    version=$(printf '%s' "$version" | tr -d '[:space:]')
+    if [ "$version" = "beta" ]; then
+        printf '%s' "$version"
+        return 0
+    fi
+    if [[ "$version" =~ ^v?[0-9]+([.][0-9]+)*([.-][A-Za-z0-9._-]+)?$ ]]; then
+        [[ "$version" == v* ]] || version="v${version}"
+        printf '%s' "$version"
+        return 0
+    fi
+    return 1
+}
+
+write_source_version_marker() {
+    local code_dir="$1" version="$2" marker tmp
+    version=$(normalize_version_value "$version" 2>/dev/null) || return 1
+    marker="${code_dir}/.faoxima-version"
+    tmp="${marker}.tmp.$$"
+    umask 022
+    printf '%s\n' "$version" > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 0644 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$marker" || { rm -f "$tmp"; return 1; }
+}
+
+read_source_version_marker() {
+    local code_dir="$1" version=""
+    [ -f "${code_dir}/.faoxima-version" ] || return 1
+    version=$(head -n 1 "${code_dir}/.faoxima-version" 2>/dev/null | tr -d '[:space:]')
+    normalize_version_value "$version"
+}
+
 show_animated_logo() {
     local latest_line="$1"
     clear
@@ -460,9 +493,71 @@ dc() {
 
 normalize_domain() {
     local domain="${1:-}"
-    domain=$(printf '%s' "$domain" | tr '[:upper:]' '[:lower:]')
-    domain="${domain%.}"
+    domain=$(printf '%s' "$domain" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | tr '[:upper:]' '[:lower:]')
+    while [[ "$domain" == *. ]]; do
+        domain="${domain%.}"
+    done
     printf '%s' "$domain"
+}
+
+validate_domain_format() {
+    local domain
+    domain=$(normalize_domain "$1")
+    DOMAIN_VALIDATION_ERROR=""
+
+    if [ -z "$domain" ]; then
+        DOMAIN_VALIDATION_ERROR="Domain cannot be empty."
+        return 1
+    fi
+
+    if [ "${#domain}" -gt 253 ]; then
+        DOMAIN_VALIDATION_ERROR="Domain is too long."
+        return 1
+    fi
+
+    if [[ "$domain" == *://* || "$domain" == */* || "$domain" == *:* || "$domain" == *@* ]]; then
+        DOMAIN_VALIDATION_ERROR="Enter only the hostname, without http://, https://, port, path, or credentials."
+        return 1
+    fi
+
+    if [[ "$domain" != *.* ]]; then
+        DOMAIN_VALIDATION_ERROR="Domain must contain at least one dot."
+        return 1
+    fi
+
+    local len half first second
+    len=${#domain}
+    if [ $((len % 2)) -eq 0 ]; then
+        half=$((len / 2))
+        first="${domain:0:half}"
+        second="${domain:half}"
+        if [ "$first" = "$second" ]; then
+            DOMAIN_VALIDATION_ERROR="Domain appears to be duplicated: ${domain}"
+            return 1
+        fi
+    fi
+
+    local labels=() label
+    IFS='.' read -r -a labels <<< "$domain"
+    if [ "${#labels[@]}" -lt 2 ]; then
+        DOMAIN_VALIDATION_ERROR="Invalid domain format."
+        return 1
+    fi
+
+    for label in "${labels[@]}"; do
+        if [ -z "$label" ] || [ "${#label}" -gt 63 ] || [[ ! "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+            DOMAIN_VALIDATION_ERROR="Invalid domain label: ${label:-<empty>}"
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+domain_resolves() {
+    local domain
+    domain=$(normalize_domain "$1")
+    getent ahosts "$domain" >/dev/null 2>&1 || getent hosts "$domain" >/dev/null 2>&1
 }
 
 get_cert_enddate() {
@@ -504,6 +599,7 @@ ensure_envsubst() {
 render_vhost() {
     local domain outfile="$2" pma_allowed_ips ip
     domain=$(normalize_domain "$1")
+    validate_domain_format "$domain" || { ui_err "$DOMAIN_VALIDATION_ERROR"; return 1; }
     ensure_envsubst || { ui_err "envsubst is not available and could not be installed."; return 1; }
     mkdir -p "$(dirname "$outfile")" || { ui_err "Failed to create directory for ${outfile}."; return 1; }
     if [ ! -f "$NGINX_TEMPLATE" ]; then
@@ -545,6 +641,7 @@ render_bot_location() {
 ensure_dummy_cert() {
     local domain
     domain=$(normalize_domain "$1")
+    validate_domain_format "$domain" || { ui_err "$DOMAIN_VALIDATION_ERROR"; return 1; }
     dc run --rm --no-deps --entrypoint sh certbot -c "
         set -e
         dir=/etc/letsencrypt/live/${domain}
@@ -571,6 +668,11 @@ discard_dummy_cert() {
 issue_certificate() {
     local domain
     domain=$(normalize_domain "$1")
+    validate_domain_format "$domain" || { ui_err "$DOMAIN_VALIDATION_ERROR"; return 1; }
+    if ! domain_resolves "$domain"; then
+        ui_err "Domain '${domain}' does not resolve in DNS. Certificate issuance was stopped before touching nginx."
+        return 1
+    fi
     if dc run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot --agree-tos --non-interactive \
             -m "admin@${domain}" -d "$domain"; then
         dc exec nginx nginx -s reload 2>/dev/null || true
@@ -598,7 +700,10 @@ env_get() {
 
 env_set() {
     local key="$1" value="$2"
-    [ "$key" = "DOMAIN" ] && value=$(normalize_domain "$value")
+    if [ "$key" = "DOMAIN" ]; then
+        value=$(normalize_domain "$value")
+        validate_domain_format "$value" || { ui_err "$DOMAIN_VALIDATION_ERROR"; return 1; }
+    fi
     if [ ! -f "$ENV_FILE" ]; then
         touch "$ENV_FILE" || { ui_err "Failed to create ${ENV_FILE}."; exit 1; }
     fi
@@ -623,6 +728,61 @@ cache_set() {
     local key="$1" value="$2"
     mkdir -p "$CACHE_DIR" 2>/dev/null || return 1
     printf '%s' "$value" > "${CACHE_DIR}/${key}"
+}
+
+ensure_host_prerequisites() {
+    local missing_packages=()
+    local cmd package
+    local required_commands=(
+        curl:curl
+        wget:wget
+        unzip:unzip
+        openssl:openssl
+        envsubst:gettext-base
+        ss:iproute2
+        gpg:gnupg
+    )
+
+    for cmd in "${required_commands[@]}"; do
+        package="${cmd#*:}"
+        cmd="${cmd%%:*}"
+        command -v "$cmd" >/dev/null 2>&1 || missing_packages+=("$package")
+    done
+
+    if [ "${#missing_packages[@]}" -eq 0 ]; then
+        ui_ok "Required host prerequisites are already installed."
+        return 0
+    fi
+
+    if ! command -v apt-get >/dev/null 2>&1; then
+        ui_err "Missing required commands: ${missing_packages[*]}. Automatic prerequisite installation currently requires an apt-based Debian/Ubuntu system."
+        return 1
+    fi
+
+    local unique_packages=() seen=" " item
+    for item in "${missing_packages[@]}"; do
+        if [[ "$seen" != *" $item "* ]]; then
+            unique_packages+=("$item")
+            seen+="$item "
+        fi
+    done
+
+    ui_action "Installing missing prerequisites automatically: ${unique_packages[*]}"
+    DEBIAN_FRONTEND=noninteractive apt-get update || { ui_err "apt-get update failed while installing prerequisites."; return 1; }
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates "${unique_packages[@]}" || { ui_err "Failed to install required prerequisites."; return 1; }
+
+    local failed=0
+    for cmd in "${required_commands[@]}"; do
+        package="${cmd#*:}"
+        cmd="${cmd%%:*}"
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            ui_err "Prerequisite '${cmd}' is still unavailable after installing package '${package}'."
+            failed=1
+        fi
+    done
+
+    [ "$failed" -eq 0 ] || return 1
+    ui_ok "All required host prerequisites are installed."
 }
 
 docker_installed() {
@@ -889,9 +1049,110 @@ verify_tables_created() {
     [ -z "$db_name" ] && db_name=$(env_get MYSQL_DATABASE)
     [ -z "$db_user" ] && db_user=$(env_get MYSQL_USER)
     [ -z "$db_pass" ] && db_pass=$(env_get MYSQL_PASSWORD)
-    local verify_sql
-    verify_sql="SELECT IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' AND TABLE_NAME IN ('user','setting','admin','channels','marzban_panel','product','invoice','Payment_report','textbot','shopSetting','support_message','crypto_wallets','processed_updates','cron_runtime_state'))=14 AND (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='user' AND COLUMN_NAME='nav_state') OR (TABLE_NAME='user' AND COLUMN_NAME='card_verify_bypass') OR (TABLE_NAME='setting' AND COLUMN_NAME='redis_enabled') OR (TABLE_NAME='setting' AND COLUMN_NAME='banner_start_status') OR (TABLE_NAME='invoice' AND COLUMN_NAME='invalidated_at') OR (TABLE_NAME='Payment_report' AND COLUMN_NAME='tetrapay_token') OR (TABLE_NAME='marzban_panel' AND COLUMN_NAME='xui_api_mode') OR (TABLE_NAME='marzban_panel' AND COLUMN_NAME='ip_limit_guard') OR (TABLE_NAME='product' AND COLUMN_NAME='ip_limit') OR (TABLE_NAME='support_message' AND COLUMN_NAME='seen_by_admin') OR (TABLE_NAME='crypto_wallets' AND COLUMN_NAME='verification_mode')))=11 AND (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND CHARACTER_SET_NAME IS NOT NULL AND CHARACTER_SET_NAME<>'utf8mb4')=0,'READY','NOT_READY');"
-    dc exec -T db mysql -u"$db_user" -p"$db_pass" "$db_name" -Nse "$verify_sql" 2>/dev/null | grep -qx "READY"
+
+    local required_tables=(
+        user setting admin channels marzban_panel product invoice Payment_report
+        textbot shopSetting support_message crypto_wallets processed_updates cron_runtime_state
+    )
+    local required_columns=(
+        "user:nav_state"
+        "user:card_verify_bypass"
+        "setting:redis_enabled"
+        "setting:banner_start_status"
+        "invoice:invalidated_at"
+        "Payment_report:tetrapay_token"
+        "marzban_panel:xui_api_mode"
+        "marzban_panel:ip_limit_guard"
+        "product:ip_limit"
+        "support_message:seen_by_admin"
+        "crypto_wallets:verification_mode"
+    )
+
+    local failed=0 table item column exists charset_issues mysql_error
+
+    for table in "${required_tables[@]}"; do
+        mysql_error=$(mktemp)
+        exists=$(dc exec -T db mysql -u"$db_user" -p"$db_pass" "$db_name" -Nse             "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' AND TABLE_NAME='${table}';"             2>"$mysql_error")
+        if [ $? -ne 0 ]; then
+            ui_err "Database schema verification query failed."
+            cat "$mysql_error"
+            rm -f "$mysql_error"
+            return 1
+        fi
+        rm -f "$mysql_error"
+        if [ "$exists" != "1" ]; then
+            ui_err "Missing database table: ${table}"
+            failed=1
+        fi
+    done
+
+    for item in "${required_columns[@]}"; do
+        table="${item%%:*}"
+        column="${item#*:}"
+        mysql_error=$(mktemp)
+        exists=$(dc exec -T db mysql -u"$db_user" -p"$db_pass" "$db_name" -Nse             "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='${table}' AND COLUMN_NAME='${column}';"             2>"$mysql_error")
+        if [ $? -ne 0 ]; then
+            ui_err "Database column verification query failed for ${table}.${column}."
+            cat "$mysql_error"
+            rm -f "$mysql_error"
+            return 1
+        fi
+        rm -f "$mysql_error"
+        if [ "$exists" != "1" ]; then
+            ui_err "Missing database column: ${table}.${column}"
+            failed=1
+        fi
+    done
+
+    mysql_error=$(mktemp)
+    charset_issues=$(dc exec -T db mysql -u"$db_user" -p"$db_pass" "$db_name" -Nse         "SELECT CONCAT(TABLE_NAME,'.',COLUMN_NAME,' = ',CHARACTER_SET_NAME) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND CHARACTER_SET_NAME IS NOT NULL AND CHARACTER_SET_NAME<>'utf8mb4' ORDER BY TABLE_NAME,ORDINAL_POSITION;"         2>"$mysql_error")
+    if [ $? -ne 0 ]; then
+        ui_err "Database utf8mb4 verification query failed."
+        cat "$mysql_error"
+        rm -f "$mysql_error"
+        return 1
+    fi
+    rm -f "$mysql_error"
+
+    if [ -n "$charset_issues" ]; then
+        ui_err "Database columns still not using utf8mb4:"
+        while IFS= read -r item; do
+            [ -n "$item" ] && printf '    %s\n' "$item"
+        done <<< "$charset_issues"
+        failed=1
+    fi
+
+    if [ "$failed" -ne 0 ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+run_table_migrations_until_ready() {
+    local service="${1:-app}" db_name="$2" db_user="$3" db_pass="$4" code_dir="${5:-$PROJECT_DIR}" label="${6:-database}"
+    local attempt max_attempts=3
+
+    for attempt in $(seq 1 "$max_attempts"); do
+        if ! dc exec -T "$service" php table.php >/dev/null 2>&1; then
+            ui_err "table.php failed while creating or updating the schema for ${label}."
+            diagnose_table_failure "$service" "$code_dir"
+            return 1
+        fi
+
+        if verify_tables_created "$db_name" "$db_user" "$db_pass"; then
+            return 0
+        fi
+
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            ui_warn "Database schema is not complete after migration pass ${attempt}/${max_attempts}; retrying table.php to finish dependent migrations..."
+            sleep 2
+        fi
+    done
+
+    ui_err "table.php completed ${max_attempts} migration passes but the database schema is still incomplete for ${label}."
+    diagnose_table_failure "$service" "$code_dir"
+    return 1
 }
 
 diagnose_table_failure() {
@@ -1154,6 +1415,7 @@ install_bot() {
         "${C_WHITE}Installing nginx + php-fpm + MySQL as a Docker Compose stack.${C_RESET}" \
         "${C_DIM}The stack will be deployed from ${PROJECT_DIR}${C_RESET}"
 
+    ensure_host_prerequisites || { ui_err "Host prerequisites could not be installed."; exit 1; }
     install_docker
 
     local install_source version_arg1="${1:-}" version_arg2="${2:-}"
@@ -1223,19 +1485,26 @@ install_bot() {
         "${C_WHITE}Now we'll wire up your domain and Telegram bot credentials.${C_RESET}" \
         "${C_DIM}Get the bot token from @BotFather and your numeric chat ID from @userinfobot.${C_RESET}"
 
-    local domainname
-    printf '\n  %s❯%s Enter the domain (e.g. example.com): ' "$C_YELLOW" "$C_RESET"
-    read -r domainname
-    while [[ ! "$domainname" =~ ^[a-zA-Z0-9.-]+$ ]]; do
-        ui_err "Invalid domain format. Please try again."
-        printf '  %s❯%s Enter the domain: ' "$C_YELLOW" "$C_RESET"
+    local domainname entered_domain
+    while true; do
+        printf '\n  %s❯%s Enter the domain (e.g. example.com): ' "$C_YELLOW" "$C_RESET"
         read -r domainname
+        entered_domain="$domainname"
+        domainname=$(normalize_domain "$domainname")
+        if ! validate_domain_format "$domainname"; then
+            ui_err "$DOMAIN_VALIDATION_ERROR"
+            continue
+        fi
+        if ! domain_resolves "$domainname"; then
+            ui_err "Domain '${domainname}' does not resolve in DNS yet. Add/fix its A or AAAA record and try again."
+            continue
+        fi
+        if [ "$entered_domain" != "$domainname" ]; then
+            ui_info "Domain normalized to: ${domainname}"
+        fi
+        ui_ok "Domain validated and DNS resolves: ${domainname}"
+        break
     done
-    local entered_domain="$domainname"
-    domainname=$(normalize_domain "$domainname")
-    if [ "$entered_domain" != "$domainname" ]; then
-        ui_info "Domain normalized to lowercase: ${domainname}"
-    fi
 
     local YOUR_BOT_TOKEN
     printf '  %s❯%s Bot Token: ' "$C_YELLOW" "$C_RESET"
@@ -1321,6 +1590,8 @@ install_bot() {
     env_set "BOTS_DIR" "$BOTS_DIR"
     env_set "INSTALL_SOURCE" "$install_source"
     env_set "FAOXIMA_INSTALLED_VERSION" "$(resolve_source_version "$install_source" "$version_arg1" "$version_arg2" "$PROJECT_DIR")"
+    env_set "FAOXIMA_SOURCE_VERSION" "$(resolve_source_version "$install_source" "$version_arg1" "$version_arg2" "$PROJECT_DIR")"
+    env_set "FAOXIMA_UPDATE_STATE" "complete"
     ui_ok "Wrote ${ENV_FILE}"
 
     mkdir -p "$NGINX_CONF_DIR" "$NGINX_BOTS_CONF_DIR" "$BOTS_DIR" || { ui_err "Failed to create ${NGINX_CONF_DIR}, ${NGINX_BOTS_CONF_DIR}, or ${BOTS_DIR}."; exit 1; }
@@ -1377,14 +1648,7 @@ install_bot() {
     fi
 
     ui_action "Initialising database tables via table.php..."
-    if ! dc exec -T app php table.php >/dev/null 2>&1; then
-        ui_err "table.php failed while creating the database schema."
-        diagnose_table_failure app "$PROJECT_DIR"
-        exit 1
-    fi
-    if ! verify_tables_created; then
-        ui_err "table.php ran but the database schema or utf8mb4 migration is incomplete."
-        diagnose_table_failure app "$PROJECT_DIR"
+    if ! run_table_migrations_until_ready app "" "" "" "$PROJECT_DIR" "Faoxima Bot"; then
         ui_err "Fix the issue above, then re-run install."
         exit 1
     fi
@@ -1444,6 +1708,8 @@ install_additional_bot() {
     ui_panel "INSTALL ADDITIONAL BOT" "$C_BOLD$C_GREEN" "$C_GREEN" \
         "${C_WHITE}Adds another bot sharing this server's domain, nginx, and MySQL.${C_RESET}" \
         "${C_DIM}The bot is reachable at the main domain under its own name (like cPanel subfolders), and gets its own database inside the same MySQL server.${C_RESET}"
+
+    ensure_host_prerequisites || { ui_err "Host prerequisites could not be installed."; return 1; }
 
     if [ ! -f "$ENV_FILE" ] || [ ! -f "$COMPOSE_FILE" ]; then
         ui_err "Install the main Faoxima Bot first (option 1) before adding additional bots."
@@ -1566,7 +1832,16 @@ TELEGRAM_ADMIN_ID=${YOUR_CHAT_ID}
 PUID=$(env_get PUID)
 PGID=$(env_get PGID)
 FAOXIMA_INSTALLED_VERSION=$(resolve_source_version "$main_install_source" "$version_arg1" "$version_arg2" "$bot_dir")
+FAOXIMA_SOURCE_VERSION=$(resolve_source_version "$main_install_source" "$version_arg1" "$version_arg2" "$bot_dir")
+FAOXIMA_UPDATE_STATE=complete
 EOF
+
+    local initial_bot_version
+    initial_bot_version=$(resolve_source_version "$main_install_source" "$version_arg1" "$version_arg2" "$bot_dir")
+    initial_bot_version=$(normalize_version_value "$initial_bot_version" 2>/dev/null || printf '%s' "$initial_bot_version")
+    write_source_version_marker "$bot_dir" "$initial_bot_version" || { ui_err "Failed to save version metadata for '${botname}'."; return 1; }
+    file_env_set "${bot_dir}/.env" "FAOXIMA_SOURCE_VERSION" "$initial_bot_version" || return 1
+    file_env_set "${bot_dir}/.env" "FAOXIMA_INSTALLED_VERSION" "$initial_bot_version" || return 1
 
     cat > "${BOT_COMPOSE_PREFIX}${botname}.yml" <<EOF
 services:
@@ -1616,14 +1891,7 @@ EOF
     dc exec nginx nginx -s reload || { ui_err "Failed to reload nginx with the new bot's location block."; return 1; }
 
     ui_action "Initialising database tables via table.php..."
-    if ! dc exec -T "app_${botname}" php table.php >/dev/null 2>&1; then
-        ui_err "table.php failed while creating the database schema for '${botname}'."
-        diagnose_table_failure "app_${botname}" "$bot_dir"
-        return 1
-    fi
-    if ! verify_tables_created "$db_name" "$db_user" "$db_pass"; then
-        ui_err "table.php ran but the database schema or utf8mb4 migration is incomplete for '${botname}'."
-        diagnose_table_failure "app_${botname}" "$bot_dir"
+    if ! run_table_migrations_until_ready "app_${botname}" "$db_name" "$db_user" "$db_pass" "$bot_dir" "${botname}"; then
         return 1
     fi
     ui_ok "Database tables initialised for '${botname}'."
@@ -1790,15 +2058,129 @@ remove_additional_bot() {
     ui_ok "Additional bot '${botname}' removed."
 }
 
+detect_additional_bot_version_from_main_source() {
+    local bot_dir="$1" main_version="" matched=0 rel main_file bot_file main_hash bot_hash
+    command -v sha256sum >/dev/null 2>&1 || return 1
+
+    main_version=$(get_installed_version 2>/dev/null || true)
+    [[ "$main_version" =~ ^v?[0-9]+([.][0-9]+)*([.-][A-Za-z0-9._-]+)?$ ]] || return 1
+    [ -d "$PROJECT_DIR" ] || return 1
+
+    for rel in index.php table.php function.php botapi.php panels.php; do
+        main_file="${PROJECT_DIR}/${rel}"
+        bot_file="${bot_dir}/${rel}"
+        [ -f "$main_file" ] || continue
+        [ -f "$bot_file" ] || continue
+        main_hash=$(sha256sum "$main_file" 2>/dev/null | awk '{print $1}')
+        bot_hash=$(sha256sum "$bot_file" 2>/dev/null | awk '{print $1}')
+        [ -n "$main_hash" ] || return 1
+        [ -n "$bot_hash" ] || return 1
+        [ "$main_hash" = "$bot_hash" ] || return 1
+        matched=$((matched + 1))
+    done
+
+    [ "$matched" -ge 3 ] || return 1
+    printf '%s' "$main_version"
+}
+
+detect_legacy_additional_bot_version() {
+    local bot_dir="$1"
+    [ -f "${bot_dir}/table.php" ] || return 1
+    [ -f "${bot_dir}/index.php" ] || return 1
+    command -v curl >/dev/null 2>&1 || return 1
+    command -v sha256sum >/dev/null 2>&1 || return 1
+
+    local local_table_hash local_index_hash cache_dir tags_file tag remote_table remote_index remote_table_hash remote_index_hash checked=0
+    local_table_hash=$(sha256sum "${bot_dir}/table.php" 2>/dev/null | awk '{print $1}')
+    local_index_hash=$(sha256sum "${bot_dir}/index.php" 2>/dev/null | awk '{print $1}')
+    [ -n "$local_table_hash" ] || return 1
+    [ -n "$local_index_hash" ] || return 1
+
+    cache_dir="/tmp/faoxima_version_detect_${UID:-0}"
+    mkdir -p "$cache_dir" 2>/dev/null || return 1
+    tags_file="${cache_dir}/tags"
+
+    if [ ! -s "$tags_file" ]; then
+        curl -fsSL --max-time 8 "https://api.github.com/repos/${FAOXIMA_REPO}/releases?per_page=20" 2>/dev/null             | grep '"tag_name"'             | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'             | head -20 > "${tags_file}.tmp" 2>/dev/null || true
+        if [ -s "${tags_file}.tmp" ]; then
+            mv "${tags_file}.tmp" "$tags_file"
+        else
+            rm -f "${tags_file}.tmp"
+            return 1
+        fi
+    fi
+
+    while IFS= read -r tag; do
+        [ -n "$tag" ] || continue
+        [[ "$tag" =~ ^v?[0-9]+([.][0-9]+)*([.-][A-Za-z0-9._-]+)?$ ]] || continue
+        checked=$((checked + 1))
+        [ "$checked" -le 20 ] || break
+
+        remote_table="${cache_dir}/${tag//\//_}.table.php"
+        remote_index="${cache_dir}/${tag//\//_}.index.php"
+
+        if [ ! -f "$remote_table" ]; then
+            curl -fsSL --max-time 8 "https://raw.githubusercontent.com/${FAOXIMA_REPO}/${tag}/table.php" -o "${remote_table}.tmp" 2>/dev/null                 && mv "${remote_table}.tmp" "$remote_table"                 || rm -f "${remote_table}.tmp"
+        fi
+        if [ ! -f "$remote_index" ]; then
+            curl -fsSL --max-time 8 "https://raw.githubusercontent.com/${FAOXIMA_REPO}/${tag}/index.php" -o "${remote_index}.tmp" 2>/dev/null                 && mv "${remote_index}.tmp" "$remote_index"                 || rm -f "${remote_index}.tmp"
+        fi
+
+        [ -f "$remote_table" ] || continue
+        [ -f "$remote_index" ] || continue
+        remote_table_hash=$(sha256sum "$remote_table" 2>/dev/null | awk '{print $1}')
+        remote_index_hash=$(sha256sum "$remote_index" 2>/dev/null | awk '{print $1}')
+
+        if [ "$local_table_hash" = "$remote_table_hash" ] && [ "$local_index_hash" = "$remote_index_hash" ]; then
+            printf '%s' "$tag"
+            return 0
+        fi
+    done < "$tags_file"
+
+    return 1
+}
+
 get_additional_bot_version() {
-    local botname="$1" bot_dir="${BOTS_DIR}/${botname}" version=""
-    if [ -f "${bot_dir}/.env" ]; then
-        version=$(file_env_get "${bot_dir}/.env" "FAOXIMA_INSTALLED_VERSION" 2>/dev/null)
+    local botname="$1"
+    local bot_dir="${BOTS_DIR}/${botname}"
+    local version="" recovered="0" current_installed=""
+    version=$(read_source_version_marker "$bot_dir" 2>/dev/null || true)
+    if [ -z "$version" ] && [ -f "${bot_dir}/.env" ]; then
+        version=$(file_env_get "${bot_dir}/.env" "FAOXIMA_SOURCE_VERSION" 2>/dev/null)
+        [ -z "$version" ] && version=$(file_env_get "${bot_dir}/.env" "FAOXIMA_INSTALLED_VERSION" 2>/dev/null)
     fi
     if [ -z "$version" ] && [ -f "${bot_dir}/version" ]; then
         version=$(tr -d '[:space:]' < "${bot_dir}/version")
+        [ -n "$version" ] && recovered="1"
     fi
-    [ -n "$version" ] && printf '%s' "$version" || printf 'unknown'
+    if [ -z "$version" ] && [ -f "${bot_dir}/install.sh" ]; then
+        version=$(awk -F'"' '/^[[:space:]]*readonly[[:space:]]+FAOXIMA_VERSION="/{print $2; exit}' "${bot_dir}/install.sh" | tr -d '[:space:]')
+        [ -n "$version" ] && recovered="1"
+    fi
+    if [ -z "$version" ]; then
+        version=$(detect_additional_bot_version_from_main_source "$bot_dir" 2>/dev/null || true)
+        [ -n "$version" ] && recovered="1"
+    fi
+    if [ -z "$version" ]; then
+        version=$(detect_legacy_additional_bot_version "$bot_dir" 2>/dev/null || true)
+        [ -n "$version" ] && recovered="1"
+    fi
+    version=$(normalize_version_value "$version" 2>/dev/null || true)
+    if [ -n "$version" ]; then
+        if [ "$recovered" = "1" ] || [ ! -f "${bot_dir}/.faoxima-version" ]; then
+            write_source_version_marker "$bot_dir" "$version" >/dev/null 2>&1 || true
+        fi
+        if [ -f "${bot_dir}/.env" ]; then
+            file_env_set "${bot_dir}/.env" "FAOXIMA_SOURCE_VERSION" "$version" >/dev/null 2>&1 || true
+            current_installed=$(file_env_get "${bot_dir}/.env" "FAOXIMA_INSTALLED_VERSION" 2>/dev/null)
+            if [ -z "$current_installed" ] && [ "$recovered" = "1" ]; then
+                file_env_set "${bot_dir}/.env" "FAOXIMA_INSTALLED_VERSION" "$version" >/dev/null 2>&1 || true
+            fi
+        fi
+        printf '%s' "$version"
+        return 0
+    fi
+    printf 'unknown'
 }
 
 confirm_additional_bot_downgrade() {
@@ -2007,7 +2389,7 @@ install_beta_additional_bot() {
     fi
 
     local botname="${names[$UI_PICK_RESULT]}"
-    printf '  %s❯%s This will overwrite '"'"'%s'"'"'s source with the latest Beta build (config.php is preserved). Continue? (y/N): ' \
+    printf '  %s❯%s This will overwrite '"'"'%s'"'"'s source with the latest Beta build while preserving existing credentials. Continue? (y/N): ' \
         "$C_YELLOW" "$C_RESET" "$botname"
     local confirm
     read -r confirm
@@ -2091,6 +2473,51 @@ prepare_update_source_dir() {
     printf '%s' "$extracted_dir"
 }
 
+config_file_get_var() {
+    local file="$1" var="$2"
+    [ -f "$file" ] || return 1
+    sed -n -E "s|^[[:space:]]*\$${var}[[:space:]]*=[[:space:]]*(['\"])(.*)\1[[:space:]]*;.*$|\2|p" "$file" | head -1
+}
+
+config_file_set_var() {
+    local file="$1" var="$2" value="$3"
+    [ -f "$file" ] || return 1
+    local escaped
+    escaped=${value//\\/\\\\}
+    escaped=${escaped//&/\\&}
+    escaped=${escaped//|/\\|}
+    escaped=${escaped//'/\\'}
+    if grep -qE "^[[:space:]]*\$${var}[[:space:]]*=" "$file"; then
+        sed -i -E "s|^([[:space:]]*\$${var}[[:space:]]*=[[:space:]]*)['\"][^'\"]*['\"]([[:space:]]*;.*)$|\1'${escaped}'\2|" "$file" || return 1
+    fi
+}
+
+migrate_runtime_config_values() {
+    local old_config="$1" new_config="$2" db_name="$3" db_user="$4" db_pass="$5"
+    local env_file="$6" var value db_host bot_token admin_id domain
+
+    db_host=$(file_env_get "$env_file" "DB_HOST" 2>/dev/null)
+    [ -z "$db_host" ] && db_host=$(env_get DB_HOST 2>/dev/null)
+    [ -z "$db_host" ] && db_host="db"
+
+    bot_token=$(file_env_get "$env_file" "TELEGRAM_BOT_TOKEN" 2>/dev/null)
+    admin_id=$(file_env_get "$env_file" "TELEGRAM_ADMIN_ID" 2>/dev/null)
+    domain=$(file_env_get "$env_file" "DOMAIN" 2>/dev/null)
+
+    config_file_set_var "$new_config" "dbname" "$db_name" || return 1
+    config_file_set_var "$new_config" "usernamedb" "$db_user" || return 1
+    config_file_set_var "$new_config" "passworddb" "$db_pass" || return 1
+    config_file_set_var "$new_config" "dbhost" "$db_host" || return 1
+    [ -n "$bot_token" ] && config_file_set_var "$new_config" "APIKEY" "$bot_token" || true
+    [ -n "$admin_id" ] && config_file_set_var "$new_config" "adminnumber" "$admin_id" || true
+    [ -n "$domain" ] && config_file_set_var "$new_config" "domainhosts" "$(normalize_domain "$domain")" || true
+
+    for var in usernamebot redis_host redis_port redis_password redis_database; do
+        value=$(config_file_get_var "$old_config" "$var" 2>/dev/null)
+        [ -n "$value" ] && config_file_set_var "$new_config" "$var" "$value" || true
+    done
+}
+
 update_bot_source() {
     local code_dir="$1" app_service="$2" label="$3" \
         mode="$4" version_arg1="$5" version_arg2="$6" zip_path="$7" \
@@ -2106,26 +2533,68 @@ update_bot_source() {
         return 1
     fi
 
-    local safe_label
+    local safe_label config_path env_path temp_config temp_env
     safe_label=$(printf '%s' "$label" | tr -c 'a-zA-Z0-9_' '_')
-    local config_path="${code_dir}/config.php"
-    local temp_config
-    temp_config=$(mktemp "/root/${safe_label}_config_backup.XXXXXX.php") || { ui_err "Failed to create a config.php backup file."; rm -rf "$work_dir"; return 1; }
+    config_path="${code_dir}/config.php"
+    env_path="${code_dir}/.env"
+    temp_config=$(mktemp "/root/${safe_label}_config_backup.XXXXXX.php") || { rm -rf "$work_dir"; ui_err "Failed to create a config.php backup file."; return 1; }
+    temp_env=$(mktemp "/root/${safe_label}_env_backup.XXXXXX") || { rm -rf "$work_dir" "$temp_config"; ui_err "Failed to create a .env backup file."; return 1; }
+
     if [ -f "$config_path" ]; then
-        cp "$config_path" "$temp_config" || { ui_err "Config file backup failed for '${label}'!"; rm -rf "$work_dir"; return 1; }
+        cp "$config_path" "$temp_config" || { rm -rf "$work_dir" "$temp_config" "$temp_env"; ui_err "Config backup failed for '${label}'."; return 1; }
+    else
+        : > "$temp_config"
+    fi
+    if [ -f "$env_path" ]; then
+        cp "$env_path" "$temp_env" || { rm -rf "$work_dir" "$temp_config" "$temp_env"; ui_err ".env backup failed for '${label}'."; return 1; }
+    else
+        : > "$temp_env"
     fi
 
     ui_action "Extracting update onto ${code_dir}..."
     if ! cp -a "${extracted_dir}/." "${code_dir}/"; then
-        ui_err "File transfer failed for '${label}'!"
-        rm -rf "$work_dir" "$temp_config"
+        rm -rf "$work_dir" "$temp_config" "$temp_env"
+        ui_err "File transfer failed for '${label}'."
         return 1
     fi
 
-    if [ -f "$temp_config" ]; then
-        mv "$temp_config" "$config_path" || { ui_err "Config file restore failed for '${label}'!"; rm -rf "$work_dir"; return 1; }
+    if [ -s "$temp_env" ]; then
+        cp "$temp_env" "$env_path" || { rm -rf "$work_dir" "$temp_config" "$temp_env"; ui_err ".env restore failed for '${label}'."; return 1; }
     fi
-    rm -rf "$work_dir"
+
+    if [ ! -f "$config_path" ]; then
+        rm -rf "$work_dir" "$temp_config" "$temp_env"
+        ui_err "The update package does not contain config.php for '${label}'."
+        return 1
+    fi
+
+    if ! migrate_runtime_config_values "$temp_config" "$config_path" "$db_name" "$db_user" "$db_pass" "$env_path"; then
+        [ -s "$temp_config" ] && cp "$temp_config" "$config_path" >/dev/null 2>&1 || true
+        rm -rf "$work_dir" "$temp_config" "$temp_env"
+        ui_err "Failed to migrate runtime credentials into the new config.php for '${label}'."
+        return 1
+    fi
+
+    local source_version
+    source_version=$(resolve_source_version "$mode" "$version_arg1" "$version_arg2" "$code_dir")
+    source_version=$(normalize_version_value "$source_version" 2>/dev/null || printf '%s' "$source_version")
+    write_source_version_marker "$code_dir" "$source_version" || {
+        rm -rf "$work_dir" "$temp_config" "$temp_env"
+        ui_err "Failed to save the source version marker for '${label}'."
+        return 1
+    }
+    file_env_set "$env_path" "FAOXIMA_SOURCE_VERSION" "$source_version" || {
+        rm -rf "$work_dir" "$temp_config" "$temp_env"
+        ui_err "Failed to save the source version for '${label}'."
+        return 1
+    }
+    file_env_set "$env_path" "FAOXIMA_UPDATE_STATE" "pending" || {
+        rm -rf "$work_dir" "$temp_config" "$temp_env"
+        ui_err "Failed to save the update state for '${label}'."
+        return 1
+    }
+
+    rm -rf "$work_dir" "$temp_config" "$temp_env"
 
     if [ "$should_build" = "1" ]; then
         ui_action "Rebuilding the app image for '${label}'..."
@@ -2141,14 +2610,7 @@ update_bot_source() {
         return 1
     fi
 
-    if ! dc exec -T "$app_service" php table.php >/dev/null 2>&1; then
-        ui_err "table.php failed while updating the database schema for '${label}'."
-        diagnose_table_failure "$app_service" "$code_dir"
-        return 1
-    fi
-    if ! verify_tables_created "$db_name" "$db_user" "$db_pass"; then
-        ui_err "table.php ran but the database schema or utf8mb4 migration is incomplete for '${label}'."
-        diagnose_table_failure "$app_service" "$code_dir"
+    if ! run_table_migrations_until_ready "$app_service" "$db_name" "$db_user" "$db_pass" "$code_dir" "${label}"; then
         return 1
     fi
 
@@ -2160,8 +2622,21 @@ update_bot_source() {
 
     local installed_version
     installed_version=$(resolve_source_version "$mode" "$version_arg1" "$version_arg2" "$code_dir")
+    installed_version=$(normalize_version_value "$installed_version" 2>/dev/null || printf '%s' "$installed_version")
+    write_source_version_marker "$code_dir" "$installed_version" || {
+        ui_err "Failed to save the source version marker for '${label}'."
+        return 1
+    }
+    file_env_set "${code_dir}/.env" "FAOXIMA_SOURCE_VERSION" "$installed_version" || {
+        ui_err "Failed to save the source version for '${label}'."
+        return 1
+    }
     file_env_set "${code_dir}/.env" "FAOXIMA_INSTALLED_VERSION" "$installed_version" || {
         ui_err "Failed to save the installed version for '${label}'."
+        return 1
+    }
+    file_env_set "${code_dir}/.env" "FAOXIMA_UPDATE_STATE" "complete" || {
+        ui_err "Failed to save the update state for '${label}'."
         return 1
     }
 
@@ -2173,7 +2648,9 @@ update_bot() {
     show_logo
     ui_panel "UPDATE FAOXIMA BOT" "$C_BOLD$C_BLUE" "$C_BLUE" \
         "${C_WHITE}Update from the latest GitHub release, or from a manually-provided ZIP.${C_RESET}" \
-        "${C_DIM}config.php and .env are always preserved.${C_RESET}"
+        "${C_DIM}Latest config.php code is installed while existing credentials and .env values are preserved.${C_RESET}"
+
+    ensure_host_prerequisites || { ui_err "Host prerequisites could not be installed."; exit 1; }
 
     if [ ! -f "$ENV_FILE" ] || [ ! -f "$COMPOSE_FILE" ]; then
         ui_err "Faoxima Bot is not installed (no .env/docker-compose.yml at ${PROJECT_DIR})."
@@ -2238,7 +2715,7 @@ install_beta_bot() {
         return 1
     fi
 
-    printf '  %s❯%s This will overwrite the current source with the latest Beta build (config.php is preserved). Continue? (y/N): ' "$C_YELLOW" "$C_RESET"
+    printf '  %s❯%s This will overwrite the current source with the latest Beta build while preserving existing credentials. Continue? (y/N): ' "$C_YELLOW" "$C_RESET"
     local confirm
     read -r confirm
     if [[ "${confirm,,}" != "y" ]]; then
@@ -2608,6 +3085,46 @@ interactive_timeout = 180
 EOF
 }
 
+compute_pm_max_children() {
+    local ram_mb="$1" cores="$2"
+    local per_worker_mb=40
+    local ram_reserved_mb=512
+    local ram_budget=$(((ram_mb - ram_reserved_mb) / per_worker_mb))
+    [ "$ram_budget" -lt 5 ] && ram_budget=5
+
+    local cpu_cap=$((cores * 10))
+    [ "$cpu_cap" -lt 10 ] && cpu_cap=10
+
+    local result="$ram_budget"
+    [ "$cpu_cap" -lt "$result" ] && result="$cpu_cap"
+    [ "$result" -lt 5 ] && result=5
+    [ "$result" -gt 100 ] && result=100
+
+    printf '%d' "$result"
+}
+
+write_fpm_pool_conf() {
+    local max_children="$1"
+    local dir="${PROJECT_DIR}/docker/php/pool.d"
+    local file="${dir}/www.conf"
+    mkdir -p "$dir" || return 1
+
+    local start_servers=$((max_children / 5))
+    [ "$start_servers" -lt 2 ] && start_servers=2
+    local min_spare=$((start_servers / 2))
+    [ "$min_spare" -lt 1 ] && min_spare=1
+    local max_spare=$((start_servers * 2))
+    [ "$max_spare" -gt "$max_children" ] && max_spare="$max_children"
+
+    cat > "$file" <<EOF
+[www]
+pm.max_children = ${max_children}
+pm.start_servers = ${start_servers}
+pm.min_spare_servers = ${min_spare}
+pm.max_spare_servers = ${max_spare}
+EOF
+}
+
 current_max_connections() {
     local mysql_root_pass
     mysql_root_pass=$(env_get MYSQL_ROOT_PASSWORD)
@@ -2863,7 +3380,25 @@ optimize_database() {
         fi
     fi
 
-    ui_warn "PHP-FPM pool tuning (pm.max_children) was intentionally skipped — no pool configuration file exists in this deployment yet."
+    if grep -qF "docker/php/pool.d/www.conf:/usr/local/etc/php-fpm.d/" "$COMPOSE_FILE" 2>/dev/null; then
+        local pm_max_children
+        pm_max_children=$(compute_pm_max_children "$ram_mb" "$cores")
+        ui_info "Computed PHP-FPM pm.max_children = ${pm_max_children} (heuristic: ~40MB/worker within available RAM, capped at 10x CPU cores)."
+
+        ui_action "Writing PHP-FPM pool tuning to docker/php/pool.d/www.conf..."
+        if write_fpm_pool_conf "$pm_max_children"; then
+            ui_action "Applying PHP-FPM pool configuration (this restarts the app container)..."
+            if dc up -d --force-recreate app; then
+                ui_ok "PHP-FPM pm.max_children set to ${pm_max_children}."
+            else
+                ui_err "Failed to restart the app container — PHP-FPM pool tuning was written but not yet applied."
+            fi
+        else
+            ui_err "Failed to write the PHP-FPM pool configuration file."
+        fi
+    else
+        ui_warn "PHP-FPM pool tuning (pm.max_children) was skipped — docker-compose.yml does not mount docker/php/pool.d/www.conf yet. Re-run the installer's compose setup or add '- ./docker/php/pool.d/www.conf:/usr/local/etc/php-fpm.d/zz-pool.conf:ro' under the app service's volumes."
+    fi
 
     if redis_service_exists; then
         local redis_mem_mb=$((ram_mb / 8))
@@ -2997,17 +3532,26 @@ change_domain() {
         return 1
     fi
 
-    local new_domain
-    while [[ ! "$new_domain" =~ ^[a-zA-Z0-9.-]+$ ]]; do
+    local new_domain entered_domain
+    while true; do
         printf '  %s❯%s Enter new domain: ' "$C_YELLOW" "$C_RESET"
         read -r new_domain
-        [[ ! "$new_domain" =~ ^[a-zA-Z0-9.-]+$ ]] && ui_err "Invalid domain format"
+        entered_domain="$new_domain"
+        new_domain=$(normalize_domain "$new_domain")
+        if ! validate_domain_format "$new_domain"; then
+            ui_err "$DOMAIN_VALIDATION_ERROR"
+            continue
+        fi
+        if ! domain_resolves "$new_domain"; then
+            ui_err "Domain '${new_domain}' does not resolve in DNS yet. Add/fix its A or AAAA record and try again."
+            continue
+        fi
+        if [ "$entered_domain" != "$new_domain" ]; then
+            ui_info "Domain normalized to: ${new_domain}"
+        fi
+        ui_ok "Domain validated and DNS resolves: ${new_domain}"
+        break
     done
-    local entered_domain="$new_domain"
-    new_domain=$(normalize_domain "$new_domain")
-    if [ "$entered_domain" != "$new_domain" ]; then
-        ui_info "Domain normalized to lowercase: ${new_domain}"
-    fi
 
     local old_domain
     old_domain=$(normalize_domain "$(env_get DOMAIN)")
@@ -3307,6 +3851,22 @@ delete_error_logs() {
         return 0
     fi
 
+    printf '\n  %s❯%s Delete ALL %d on-disk log file(s)? (y/N): ' "$C_YELLOW" "$C_RESET" "${#file_idx[@]}"
+    local confirm_all; read -r confirm_all
+    if [[ "${confirm_all,,}" == "y" ]]; then
+        local i deleted=0 failed=0
+        for i in "${file_idx[@]}"; do
+            if rm -f "${paths_ref[$i]}" 2>/dev/null; then
+                deleted=$((deleted + 1))
+            else
+                failed=$((failed + 1))
+            fi
+        done
+        ui_ok "Deleted ${deleted} log file(s)."
+        [ "$failed" -gt 0 ] && ui_warn "Failed to delete ${failed} log file(s)."
+        return 0
+    fi
+
     local total="${#file_idx[@]}"
     local page_size=20
     local page=0
@@ -3448,7 +4008,10 @@ file_env_get() {
 
 file_env_set() {
     local file="$1" key="$2" value="$3"
-    [ "$key" = "DOMAIN" ] && value=$(normalize_domain "$value")
+    if [ "$key" = "DOMAIN" ]; then
+        value=$(normalize_domain "$value")
+        validate_domain_format "$value" || { ui_err "$DOMAIN_VALIDATION_ERROR"; return 1; }
+    fi
     local escaped_value
     escaped_value=${value//\\/\\\\}
     escaped_value=${escaped_value//&/\\&}

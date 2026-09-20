@@ -79,6 +79,10 @@ if (!checktelegramip())
 if (intval($from_id) == 0)
     return;
 
+if (!empty($callback_query_id) && function_exists('rx_flushPendingReplyKeyboardCleanup')) {
+    rx_flushPendingReplyKeyboardCleanup($from_id);
+}
+
 $user = select("user", "*", "id", $from_id, "select", ['cache' => false]);
 $isNewUser = !is_array($user);
 $otherreport = select("topicid", "idreport", "report", "otherreport", "select")['idreport'];
@@ -930,12 +934,27 @@ if ($setting['Bot_Status'] == "botstatusoff" && !in_array($from_id, $admin_ids))
 
 $isStartRequest = ($text == "/start" || $datain == "start" || $text == "start" || (is_string($text) && strpos($text, "/start ") === 0));
 $isConfirmChannel = ($datain == "confirmchannel");
-$shouldCheckChannel = ($isStartRequest || $isConfirmChannel || $user['joinchannel'] != "active");
+$shouldCheckChannel = true;
 
 if ($shouldCheckChannel && !in_array($from_id, $admin_ids)) {
     $channels_id = select("channels", "link", null, null, "FETCH_COLUMN", ['cache' => false]);
     if (!empty($channels_id) && is_array($channels_id)) {
-        $channels = channel($channels_id);
+        $channels = null;
+        $rxChannelCacheApcu = function_exists('apcu_fetch') && function_exists('apcu_store') && filter_var((string) ini_get('apc.enabled'), FILTER_VALIDATE_BOOLEAN);
+        $rxChannelCacheKey = 'faoxima:joinchannel:' . $from_id . ':' . md5(implode(',', $channels_id));
+        if (!$isConfirmChannel && !$isStartRequest && $rxChannelCacheApcu) {
+            $rxChannelCacheHit = false;
+            $rxChannelCached = apcu_fetch($rxChannelCacheKey, $rxChannelCacheHit);
+            if ($rxChannelCacheHit && is_array($rxChannelCached)) {
+                $channels = $rxChannelCached;
+            }
+        }
+        if ($channels === null) {
+            $channels = channel($channels_id);
+            if ($rxChannelCacheApcu) {
+                @apcu_store($rxChannelCacheKey, $channels, 30);
+            }
+        }
         if ($isConfirmChannel) {
             if (count($channels) == 0) {
                 update("user", "joinchannel", "active", "id", $from_id);
@@ -1048,6 +1067,9 @@ if ($text == "/start" || $datain == "start" || $text == "start") {
     update("user", "Processing_value_tow", "0", "id", $from_id);
     update("user", "Processing_value_four", "0", "id", $from_id);
     step('home', $from_id);
+    if (function_exists('removeReplyKeyboardOnStartIfNeeded')) {
+        removeReplyKeyboardOnStartIfNeeded($from_id);
+    }
     rx_send_banner_message($from_id, 'start', $datatextbot['text_start'], $keyboard, "html");
     return;
 }
@@ -1066,7 +1088,7 @@ if ($text == "version") {
     update("user", "Processing_value_tow", "0", "id", $from_id);
     update("user", "Processing_value_four", "0", "id", $from_id);
     $_bk_id  = (string) $from_id;
-    $_bk_del = $connect->prepare("DELETE FROM Payment_report WHERE id_user = ? AND payment_Status IN ('Unpaid','pending','waiting') AND Payment_Method = 'cart to cart' AND (dec_not_confirmed IS NULL OR dec_not_confirmed = '')");
+    $_bk_del = $connect->prepare("DELETE FROM Payment_report WHERE id_user = ? AND payment_Status IN ('Unpaid','pending') AND Payment_Method = 'cart to cart' AND (dec_not_confirmed IS NULL OR dec_not_confirmed = '')");
     $_bk_del->bind_param("s", $_bk_id);
     $_bk_del->execute();
     $_bk_del->close();
@@ -1310,7 +1332,8 @@ if ($text == "version") {
         }
         $usernameconfig = $date['username'];
     } else {
-        if (!preg_match('/^\w{3,32}$/', $text)) {
+        $text = str_replace('_', '-', $text);
+        if (!preg_match('/^[A-Za-z0-9-]{3,32}$/', $text)) {
             sendmessage($from_id, $textbotlang['users']['stateus']['Invalidusername'], $backuser, 'html');
             return;
         }
@@ -2015,11 +2038,14 @@ $nameconfig";
         }
         $keyboardsetting['inline_keyboard'][] = [$_rx_back_btn];
         $keyboardsetting = json_encode($keyboardsetting);
+        $subLastUserAgent = trim((string)($DataUserOut['sub_last_user_agent'] ?? ''));
+        $subClientLine = $subLastUserAgent !== '' && strcasecmp($subLastUserAgent, 'Faoxima-Mini/1.0') !== 0
+            ? "\n#️⃣ کلاینت متصل شده :<code>{$subLastUserAgent}</code>"
+            : '';
         if ($DataUserOut['sub_updated_at'] !== null) {
             $textconnect = "
 📶 اخرین زمان اتصال  : $lastonline
-🔄 اخرین زمان آپدیت لینک اشتراک  : $lastupdate
-#️⃣ کلاینت متصل شده :<code>{$DataUserOut['sub_last_user_agent']}</code>";
+🔄 اخرین زمان آپدیت لینک اشتراک  : $lastupdate{$subClientLine}";
         } elseif ($marzban['type'] == "WGDashboard") {
             $textconnect = "";
         } else {
@@ -2344,7 +2370,7 @@ $nameconfig";
 
     if ($marzban_list_get['type'] == "WGDashboard") {
         sendmessage($from_id, $textsub, $bakinfos, 'HTML');
-        $urlimage = "{$marzban_list_get['inboundid']}_{$nameloc['username']}.conf";
+        $urlimage = normalizeConfigFilename("{$marzban_list_get['inboundid']}-{$nameloc['username']}.conf", $marzban_list_get['namecustom'] ?? '', true);
         file_put_contents($urlimage, $DataUserOut['subscription_url']);
         sendDocument($from_id, $urlimage, "⚙️ کانفیگ شما");
         unlink($urlimage);
@@ -2586,13 +2612,13 @@ $nameconfig";
             if (function_exists('xui_wg_conf_from_link')) {
                 $allWgConf = xui_wg_conf_from_link($allConfigItem);
                 if (is_array($allWgConf)) {
-                    $allWgName = xui_wg_conf_filename($allConfigItem, $allWgConf['protocol'], $i);
-                    $allWgDest = "{$from_id}_" . bin2hex(random_bytes(3)) . '_' . $allWgName;
+                    $allWgName = normalizeConfigFilename(xui_wg_conf_filename($allConfigItem, $allWgConf['protocol'], $i), $_configgetPanelChk['namecustom'] ?? '', true);
+                    $allWgDest = "{$from_id}-" . bin2hex(random_bytes(3)) . '-' . $allWgName;
                     file_put_contents($allWgDest, $allWgConf['conf']);
                     $allWgLabel = $allWgConf['protocol'] === 'amneziawg' ? 'AmneziaWG' : 'WireGuard';
                     telegram('sendDocument', [
                         'chat_id' => $from_id,
-                        'document' => new CURLFile($allWgDest),
+                        'document' => new CURLFile($allWgDest, 'application/octet-stream', $allWgName),
                         'caption' => "⚙️ کانفیگ شما ({$allWgLabel})",
                         'parse_mode' => 'HTML',
                     ]);
@@ -2610,11 +2636,12 @@ $nameconfig";
     $selectedConfig = (string) $DataUserOut['links'][$dataget[2]];
     if ((int) $dataget[2] === 0 && !empty($DataUserOut['single_config_file']) && is_array($DataUserOut['single_config_file'])) {
         $singleConfigFile = $DataUserOut['single_config_file'];
-        $xuiFileDest = "{$from_id}_" . bin2hex(random_bytes(3)) . '_' . $singleConfigFile['filename'];
+        $xuiFileName = normalizeConfigFilename($singleConfigFile['filename'], $_configgetPanelChk['namecustom'] ?? '', true);
+        $xuiFileDest = "{$from_id}-" . bin2hex(random_bytes(3)) . '-' . $xuiFileName;
         file_put_contents($xuiFileDest, $singleConfigFile['value']);
         telegram('sendDocument', [
             'chat_id' => $from_id,
-            'document' => new CURLFile($xuiFileDest),
+            'document' => new CURLFile($xuiFileDest, 'application/octet-stream', $xuiFileName),
             'caption' => "⚙️ کانفیگ شما",
             'parse_mode' => 'HTML',
         ]);
@@ -2624,13 +2651,13 @@ $nameconfig";
     if (function_exists('xui_wg_conf_from_link')) {
         $xuiWgConf = xui_wg_conf_from_link($selectedConfig);
         if (is_array($xuiWgConf)) {
-            $xuiWgName = xui_wg_conf_filename($selectedConfig, $xuiWgConf['protocol'], (int) $dataget[2]);
-            $xuiWgDest = "{$from_id}_" . bin2hex(random_bytes(3)) . '_' . $xuiWgName;
+            $xuiWgName = normalizeConfigFilename(xui_wg_conf_filename($selectedConfig, $xuiWgConf['protocol'], (int) $dataget[2]), $_configgetPanelChk['namecustom'] ?? '', true);
+            $xuiWgDest = "{$from_id}-" . bin2hex(random_bytes(3)) . '-' . $xuiWgName;
             file_put_contents($xuiWgDest, $xuiWgConf['conf']);
             $xuiWgLabel = $xuiWgConf['protocol'] === 'amneziawg' ? 'AmneziaWG' : 'WireGuard';
             telegram('sendDocument', [
                 'chat_id' => $from_id,
-                'document' => new CURLFile($xuiWgDest),
+                'document' => new CURLFile($xuiWgDest, 'application/octet-stream', $xuiWgName),
                 'caption' => "⚙️ کانفیگ شما ({$xuiWgLabel})",
                 'parse_mode' => 'HTML',
             ]);
@@ -2641,9 +2668,10 @@ $nameconfig";
     if (function_exists('rebeccaConfigDownloadInfo')) {
         $rebeccaDownloadInfo = rebeccaConfigDownloadInfo($selectedConfig);
         if ($rebeccaDownloadInfo !== null) {
-            $rebeccaDownloadDest = "{$from_id}_" . bin2hex(random_bytes(3)) . '_' . $rebeccaDownloadInfo['filename'];
+            $rebeccaPublicName = normalizeConfigFilename($rebeccaDownloadInfo['filename'], $_configgetPanelChk['namecustom'] ?? '', $rebeccaDownloadInfo['kind'] === 'wireguard');
+            $rebeccaDownloadDest = "{$from_id}-" . bin2hex(random_bytes(3)) . '-' . $rebeccaPublicName;
             if (rebeccaDownloadConfigFile($rebeccaDownloadInfo['url'], $rebeccaDownloadDest)) {
-                sendDocument($from_id, $rebeccaDownloadDest, "⚙️ کانفیگ شما");
+                sendDocument($from_id, $rebeccaDownloadDest, "⚙️ کانفیگ شما", $rebeccaPublicName);
                 unlink($rebeccaDownloadDest);
             } else {
                 sendmessage($from_id, $datatextbot['dyn_errors_config_read_from_panel_error'] ?? "❌ خطا در خواندن کانفیگ از پنل.", null, 'html');
@@ -2897,7 +2925,7 @@ $nameconfig";
     $mainvolume = $mainvolume[$user['agent']];
     $maxvolume = json_decode($marzban_list_get['maxvolume'], true);
     $maxvolume = $maxvolume[$user['agent']];
-    $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')");
+    $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
     $stmt->execute([
         ':service_location' => $marzban_list_get['name_panel'],
         ':agent' => $user['agent'],
@@ -2923,7 +2951,7 @@ $nameconfig";
         return;
     }
     if (!panel_feature_enabled($nameloc['Service_location'], 'categorytime')) {
-        $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND (agent = :agent OR agent = 'all')");
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
         $stmt->execute([
             ':service_location' => $nameloc['Service_location'],
             ':agent' => $user['agent'],
@@ -2998,7 +3026,7 @@ $nameconfig";
     $monthenumber = $dataget[1];
     $userdate = json_decode($user['Processing_value'], true);
     $nameloc = select("invoice", "*", "id_invoice", $userdate['id_invoice'], "select");
-    $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND Service_time = :monthe AND (agent = :agent OR agent = 'all')");
+    $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND Service_time = :monthe AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
     $stmt->execute([
         ':service_location' => $nameloc['Service_location'],
         'monthe' => $monthenumber,
@@ -3092,7 +3120,7 @@ $nameconfig";
         $product['Volume_constraint'] = $userdate['volume'];
         step("home", $from_id);
     } else {
-        $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND code_product = :code_product AND (agent = :agent OR agent = 'all')");
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND code_product = :code_product AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
         $stmt->execute([
             ':service_location' => $nameloc['Service_location'],
             ':code_product' => $codeproduct,
@@ -3182,7 +3210,7 @@ $nameconfig";
         $info_product['Service_time'] = $userdate['time'];
         $info_product['Volume_constraint'] = $userdate['data_limit'];
     } else {
-        $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:Location, Location) > 0 or Location = '/all') AND (agent = :agent OR agent = 'all') LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (FIND_IN_SET(:Location, Location) > 0 or Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers')) LIMIT 1");
         $stmt->bindParam(':code_product', $userdate['code_product'], PDO::PARAM_STR);
         $stmt->bindParam(':Location', $marzban_list_get['name_panel'], PDO::PARAM_STR);
         $stmt->bindParam(':agent', $user['agent'], PDO::PARAM_STR);
@@ -3253,7 +3281,7 @@ $nameconfig";
         $prodcut['Volume_constraint'] = $userdata['data_limit'];
         $prodcut['inbounds'] = $marzban_list_get['inboundid'];
     } else {
-        $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND code_product = :code_product AND (agent = :agent OR agent = 'all')");
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND code_product = :code_product AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
         $stmt->execute([
             ':service_location' => $nameloc['Service_location'],
             ':code_product' => $userdata['code_product'],
@@ -3361,6 +3389,9 @@ $nameconfig";
         }
         $Balance_Low_user = $__chargeEx['new_balance'];
         $__chargedExUser = true;
+        if (function_exists('wallet_ledger_record')) {
+            wallet_ledger_record($from_id, 'debit', $pricelastextend, 'service_action', 'تمدید سرویس', $randomString, 'invoice', (string)$id_invoice);
+        }
     } else {
         $Balance_Low_user = $user['Balance'];
     }
@@ -3371,7 +3402,10 @@ $nameconfig";
     $extend = $ManagePanel->extend($marzban_list_get['Methodextend'], $prodcut['Volume_constraint'], $prodcut['Service_time'], $nameloc['username'], $prodcut['code_product'], $marzban_list_get['code_panel']);
     if ($extend['status'] == false) {
         if ($__chargedExUser && function_exists('balance_atomic_credit')) {
-            balance_atomic_credit($from_id, $pricelastextend);
+            $__refundedEx = balance_atomic_credit($from_id, $pricelastextend);
+            if ($__refundedEx && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($from_id, 'credit', $pricelastextend, 'refund', 'بازگشت وجه تمدید سرویس', $randomString, 'invoice', (string)$id_invoice);
+            }
         }
         $rxStockEmpty = ($extend['code'] ?? '') === 'manual_stock_empty';
         $rxQueuedExists = ($extend['code'] ?? '') === 'queued_renewal_exists';
@@ -3784,6 +3818,7 @@ $nameconfig";
         }
     }
     $__allowNegVx = ($user['agent'] === 'n2') ? (int)($user['maxbuyagent'] ?? 0) : 0;
+    $__chargedVxUser = false;
     if ($volumepricelast > 0) {
         $__chargeVx = function_exists('balance_atomic_charge') ? balance_atomic_charge($from_id, $volumepricelast, $__allowNegVx) : ['ok' => false];
         if (empty($__chargeVx['ok'])) {
@@ -3791,6 +3826,10 @@ $nameconfig";
             return;
         }
         $Balance_Low_user = $__chargeVx['new_balance'];
+        $__chargedVxUser = true;
+        if (function_exists('wallet_ledger_record')) {
+            wallet_ledger_record($from_id, 'debit', $volumepricelast, 'service_action', 'خرید حجم اضافه', null, 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+        }
     } else {
         $Balance_Low_user = $user['Balance'];
     }
@@ -3804,6 +3843,12 @@ $nameconfig";
     $data_limit = intval($volume) / intval($extrapricevalue);
     $extra_volume = $ManagePanel->extra_volume($nameloc['username'], $marzban_list_get['code_panel'], $data_limit);
     if ($extra_volume['status'] == false) {
+        if ($__chargedVxUser && function_exists('balance_atomic_credit')) {
+            $__refundedVx = balance_atomic_credit($from_id, $volumepricelast);
+            if ($__refundedVx && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($from_id, 'credit', $volumepricelast, 'refund', 'بازگشت وجه خرید حجم اضافه', null, 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+            }
+        }
         $extra_volume['msg'] = json_encode($extra_volume['msg']);
         $textreports = "خطای خرید حجم اضافه
 <blockquote>نام پنل : {$marzban_list_get['name_panel']}</blockquote>
@@ -3984,7 +4029,7 @@ $nameconfig";
         $prodcut['code_product'] = "🛍 حجم دلخواه";
         $product['inbounds'] = null;
     } else {
-        $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND name_product = :name_product AND (agent = :agent OR agent = 'all')");
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:service_location, Location) > 0 OR Location = '/all') AND name_product = :name_product AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
         $stmt->execute([
             ':service_location' => $nameloc['Service_location'],
             'name_product' => $nameloc['name_product'],
@@ -4149,6 +4194,9 @@ $nameconfig";
             return;
         }
         $Balance_Low_user = $__chargePc['new_balance'];
+        if (function_exists('wallet_ledger_record')) {
+            wallet_ledger_record($from_id, 'debit', $Pricechange, 'service_action', 'تغییر موقعیت سرویس', null, 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+        }
     }
     update("invoice", "Service_location", $marzban_list_get_new['name_panel'], "username", $nameloc['username']);
     if ($marzban_list_get_new['inboundid'] != null) {
@@ -4549,6 +4597,9 @@ $nameconfig";
             return;
         }
         $Balance_Low_user = $__chargeEt['new_balance'];
+        if (function_exists('wallet_ledger_record')) {
+            wallet_ledger_record($from_id, 'debit', $pricelasttime, 'service_action', 'خرید زمان اضافه', null, 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+        }
     } else {
         $Balance_Low_user = $user['Balance'];
     }
@@ -4582,7 +4633,10 @@ $nameconfig";
         }
 
         if (!empty($__chargedEtUser) && function_exists('balance_atomic_credit')) {
-            balance_atomic_credit($from_id, $pricelasttime);
+            $__refundedEt = balance_atomic_credit($from_id, $pricelasttime);
+            if ($__refundedEt && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($from_id, 'credit', $pricelasttime, 'refund', 'بازگشت وجه زمان اضافه', null, 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+            }
         }
         return;
     }

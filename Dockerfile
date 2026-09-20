@@ -2,6 +2,7 @@ FROM php:8.2-apache
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        ca-certificates \
         cron \
         default-mysql-client \
         libcurl4-openssl-dev \
@@ -14,6 +15,7 @@ RUN apt-get update \
         libssh2-1-dev \
         libxml2-dev \
         libzip-dev \
+        openssl \
         unzip \
     && docker-php-ext-configure gd --with-jpeg --with-freetype \
     && docker-php-ext-install -j"$(nproc)" mysqli pdo_mysql mbstring zip gd curl soap intl bcmath sockets \

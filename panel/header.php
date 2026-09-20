@@ -2,50 +2,53 @@
 
 
 if (session_status() === PHP_SESSION_NONE) {
+    ini_set('session.cookie_samesite', 'Lax');
+    ini_set('session.cookie_httponly', '1');
     session_start();
 }
 
 // Panel version (read from the project root `version` file). Displayed in the
 // sidebar footer on every page. Always shown with a leading "v".
 $__panelVersionRaw = trim((string)@file_get_contents(__DIR__ . '/../version'));
-if ($__panelVersionRaw === '') $__panelVersionRaw = '1.0.0';
+if ($__panelVersionRaw === '') $__panelVersionRaw = '1.0.5';
 $__panelVersion = (stripos($__panelVersionRaw, 'v') === 0) ? $__panelVersionRaw : ('v' . $__panelVersionRaw);
 
 if (isset($_SESSION["user"])) {
-    $__can_check = false;
-    $__ip_list   = [];
-    $__iplogin_unlimited = false;
     if (isset($pdo) && $pdo instanceof PDO) {
-        $__can_check   = true;
-        $__stmt_ip     = $pdo->query("SELECT iplogin FROM setting LIMIT 1");
-        $__raw_iplogin = $__stmt_ip ? (string)$__stmt_ip->fetchColumn() : '';
-        if ($__raw_iplogin === '*' || $__raw_iplogin === 'all' || $__raw_iplogin === 'unlimited') {
-            $__iplogin_unlimited = true;
-        } elseif ($__raw_iplogin !== '' && $__raw_iplogin !== '0') {
-            $__decoded = json_decode($__raw_iplogin, true);
-            if (is_array($__decoded)) {
-                if (in_array('*', $__decoded, true) || in_array('all', $__decoded, true) || in_array('unlimited', $__decoded, true)) {
-                    $__iplogin_unlimited = true;
+        $__stmt_admin_ip = $pdo->prepare("SELECT iplogin FROM admin WHERE username = :username LIMIT 1");
+        $__stmt_admin_ip->bindValue(':username', $_SESSION["user"], PDO::PARAM_STR);
+        $__stmt_admin_ip->execute();
+        $__raw_admin_ip = $__stmt_admin_ip->fetchColumn();
+
+        $__admin_ip_list = [];
+        $__admin_ip_unlimited = false;
+        if ($__raw_admin_ip !== false && $__raw_admin_ip !== null && $__raw_admin_ip !== '') {
+            $__admin_ip_decoded = json_decode((string)$__raw_admin_ip, true);
+            if (is_array($__admin_ip_decoded)) {
+                if (in_array('*', $__admin_ip_decoded, true) || in_array('all', $__admin_ip_decoded, true) || in_array('unlimited', $__admin_ip_decoded, true)) {
+                    $__admin_ip_unlimited = true;
                 } else {
-                    $__ip_list = $__decoded;
+                    $__admin_ip_list = $__admin_ip_decoded;
                 }
-            } elseif (filter_var($__raw_iplogin, FILTER_VALIDATE_IP)) {
-                $__ip_list = [$__raw_iplogin];
+            } elseif ($__raw_admin_ip === '*' || $__raw_admin_ip === 'all' || $__raw_admin_ip === 'unlimited') {
+                $__admin_ip_unlimited = true;
+            } elseif (filter_var($__raw_admin_ip, FILTER_VALIDATE_IP)) {
+                $__admin_ip_list = [$__raw_admin_ip];
             }
+        } else {
+            $__admin_ip_unlimited = true;
         }
-    }
-    if ($__can_check) {
+
         $__current_ip = $_SERVER['REMOTE_ADDR'] ?? '';
-        $__allowed    = $__iplogin_unlimited || (!empty($__ip_list) && in_array($__current_ip, $__ip_list, true));
+        $__allowed = $__admin_ip_unlimited || (!empty($__admin_ip_list) && in_array($__current_ip, $__admin_ip_list, true));
         if (!$__allowed) {
             session_unset();
             session_destroy();
             header('Location: login.php', true, 302);
             exit;
         }
-        unset($__current_ip, $__allowed);
+        unset($__stmt_admin_ip, $__raw_admin_ip, $__admin_ip_decoded, $__admin_ip_list, $__admin_ip_unlimited, $__current_ip, $__allowed);
     }
-    unset($__can_check, $__ip_list, $__raw_iplogin, $__decoded, $__stmt_ip, $__iplogin_unlimited);
 }
 
 
@@ -496,6 +499,7 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
                     <li><a href="keyboard.php"><span class="menu-symbol"><?php echo icon('keyboard', 'svg-icon'); ?></span><span>چیدمان کیبورد</span></a></li>
                     <li><a href="service_keyboard.php"><span class="menu-symbol"><?php echo icon('palette', 'svg-icon'); ?></span><span>رنگ‌بندی دکمه‌ها</span></a></li>
                     <li><a href="appearance.php"><span class="menu-symbol"><?php echo icon('sparkles', 'svg-icon'); ?></span><span>تنظیمات ظاهر</span></a></li>
+                    <li><a href="miscsettings.php"><span class="menu-symbol"><?php echo icon('sliders', 'svg-icon'); ?></span><span>تنظیمات متفرقه</span></a></li>
                     <li><a href="trust_channel.php"><span class="menu-symbol"><?php echo icon('shield', 'svg-icon'); ?></span><span>تنظیم کانال اعتماد</span></a></li>
                     <li><a href="banner.php"><span class="menu-symbol"><?php echo icon('image', 'svg-icon'); ?></span><span>تنظیم بنر</span></a></li>
                 </ul>
@@ -672,5 +676,4 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
     }
 })();
 </script>
-
 

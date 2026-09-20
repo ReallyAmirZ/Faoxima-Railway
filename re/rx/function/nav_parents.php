@@ -73,6 +73,8 @@ if (!function_exists('rxNavParent')) {
                 'GetusernameconfigAndOrdedrs' => 'usershub',
                 'addadmin'                  => 'usershub',
                 'getrule'                   => 'usershub',
+                'webpanel_mgr_get_uname'    => 'settings',
+                'webpanel_mgr_get_ip'       => 'settings',
                 'getmeesagestatus'          => 'usershub',
                 'antispam_get_count'        => 'featcat_antispam',
                 'antispam_get_mute'         => 'featcat_antispam',
@@ -302,12 +304,17 @@ if (!function_exists('rxNavParent')) {
                 'add_guard_version'         => 'panels',
                 'add_rebecca_api_key'       => 'panels',
                 'add_pasarguard_api_key'    => 'panels',
+                'add_pasarguard_auth_method' => 'panels',
+                'add_pasarguard_username'   => 'panels',
+                'add_pasarguard_password'   => 'panels',
                 'add_xui_api_mode'          => 'panels',
                 'add_xui_api_token'         => 'panels',
                 'guard_svc_edit'            => 'PanelMenu',
                 'guard_edit_api_key'        => 'PanelMenu',
                 'rebecca_edit_api_key'      => 'PanelMenu',
                 'pasarguard_edit_api_key'   => 'PanelMenu',
+                'pasarguard_edit_username'  => 'PanelMenu',
+                'pasarguard_edit_password'  => 'PanelMenu',
                 'edit_xui_api_mode'         => 'PanelMenu',
                 'edit_xui_api_token'        => 'PanelMenu',
                 'confirmremovepanel'        => 'PanelMenu',
@@ -324,6 +331,7 @@ if (!function_exists('rxNavParent')) {
                 'updatetime'                => 'PanelMenu',
                 'val_usertest'              => 'PanelMenu',
                 'getlimitnew'               => 'PanelMenu',
+                'panellimit_getnew'         => 'PanelMenu',
                 'GetusernameNew'            => 'PanelMenu',
                 'GeturlNew'                 => 'PanelMenu',
                 'protocolset'               => 'PanelMenu',
@@ -359,6 +367,9 @@ if (!function_exists('rxNavParent')) {
                 'switchtype_remna_token'    => 'PanelMenu',
                 'switchtype_rebecca_api_key' => 'PanelMenu',
                 'switchtype_pasarguard_api_key' => 'PanelMenu',
+                'switchtype_pasarguard_auth_method' => 'PanelMenu',
+                'switchtype_pasarguard_username' => 'PanelMenu',
+                'switchtype_pasarguard_password' => 'PanelMenu',
                 'switchtype_xui_api_mode'   => 'PanelMenu',
                 'switchtype_xui_token'      => 'PanelMenu',
 
@@ -436,6 +447,9 @@ if (!function_exists('rxNavParent')) {
                 'getpanelhidebotsaz'                => 'usershub',
                 'getremovehidepanel'                => 'usershub',
                 'gettextgift'                       => 'usershub',
+
+                'getrenewcashtarget'                => 'shop',
+                'getrenewcashtargetdays'            => 'shop',
             ];
         }
         $step = (string) $step;
@@ -534,6 +548,7 @@ if (!function_exists('rxNavMenuSignatures')) {
                     'apn:🔧 کانفیگ دستی'      => 'PanelMenu',
                 ],
                 'labels' => [
+                    '📚 افزودن آموزش'          => 'help',
                     '🖼 مشاهده بنر فعال'        => 'featnav_affiliates',
                     '📅 سقف روزانه معرفی'       => 'affiliates_antifraud_menu',
                     'ویرایش رسانه'             => 'help_edit',
@@ -895,7 +910,7 @@ if (!function_exists('rx_render_channel_manage')) {
                 $msg = $prefixMsg . "\n\n" . $msg;
             }
             $kb = function_exists('rx_get_channel_manage_keyboard')
-                ? rx_get_channel_manage_keyboard($chan['id'])
+                ? rx_get_channel_manage_keyboard($chan['id'], true)
                 : (function_exists('rx_get_channel_keyboard') ? rx_get_channel_keyboard() : $channelkeyboard);
             if (function_exists('nm_adminInstantReply')) {
                 nm_adminInstantReply($from_id, $msg, $kb, 'HTML');
@@ -916,6 +931,52 @@ if (!function_exists('rx_render_channel_manage')) {
     }
 }
 
+if (!function_exists('rxAdminPanelEntryRequiresChannelReport')) {
+    function rxAdminPanelEntryRequiresChannelReport($setting, $adminrulecheck)
+    {
+        return ($adminrulecheck['rule'] ?? '') == "administrator" && empty($setting['Channel_Report']);
+    }
+}
+
+if (!function_exists('rxAdminPanelEntryForceChannelReportSetup')) {
+    function rxAdminPanelEntryForceChannelReportSetup($from_id, $setting, $textbotlang, $backadmin)
+    {
+        $textreports = "📣 تنظیم گروه گزارشات ربات
+
+در این بخش می‌توانید آیدی عددی گروه موردنظر را برای ارسال اعلان‌ها و گزارشات ربات ثبت نمایید.
+
+آموزش تنظیم گروه:
+1 ـ ابتدا یک گروه جدید ایجاد کنید یا گروه موردنظر خود را انتخاب نمایید.
+2 ـ از تنظیمات گروه، قابلیت تاپیک را فعال کنید.
+3 ـ ربات خود را به گروه اضافه کرده و دسترسی مدیریت موردنیاز را به آن بدهید.
+4 ـ سپس داخل همان گروه، یکی از عبارت‌های «آیدی» یا «ایدی» را ارسال کنید.
+5 ـ ربات، آیدی عددی گروه را برای شما نمایش می‌دهد. آیدی نمایش‌داده‌شده را کپی کرده و در این بخش برای ربات ارسال نمایید.
+
+⚠️ توجه داشته باشید که قبل از درخواست آیدی، تاپیک گروه باید فعال شده باشد.
+
+⛔️ برای ورود به پنل مدیریت، ابتدا باید گروه گزارشات ربات را تنظیم نمایید.
+
+آیدی عددی فعلی شما: {$setting['Channel_Report']}";
+        step('addchannelid', $from_id);
+        if (function_exists('rxNavSetState')) {
+            rxNavSetState($from_id, 'addchannelid');
+        }
+        nm_adminInstantReply($from_id, $textreports, $backadmin, 'HTML');
+    }
+}
+
+if (!function_exists('rxAdminNavRequiresChannelReport')) {
+    function rxAdminNavRequiresChannelReport()
+    {
+        $setting = isset($GLOBALS['setting']) && is_array($GLOBALS['setting']) ? $GLOBALS['setting'] : null;
+        $adminrulecheck = isset($GLOBALS['adminrulecheck']) && is_array($GLOBALS['adminrulecheck']) ? $GLOBALS['adminrulecheck'] : null;
+        if ($setting === null || $adminrulecheck === null) {
+            return false;
+        }
+        return rxAdminPanelEntryRequiresChannelReport($setting, $adminrulecheck);
+    }
+}
+
 if (!function_exists('rxRenderMenuState')) {
     function rxRenderMenuState($state, $from_id)
     {
@@ -925,9 +986,17 @@ if (!function_exists('rxRenderMenuState')) {
                $channelkeyboard, $supportcenter, $textbotlang, $user,
                $affiliates, $affiliatesAntiFraud, $keyboardchangelimit, $autoconfirm_advanced_keyboard,
                $CartManage, $trnado, $tonpay, $cubepay, $blupal, $atlaspay, $tetrapay, $keyboardzarinpal,
-               $NowPaymentsManage, $iranpaykeyboard, $tronnowpayments, $Startelegram, $nowpayment_setting_keyboard;
+               $NowPaymentsManage, $iranpaykeyboard, $tronnowpayments, $Startelegram, $nowpayment_setting_keyboard,
+               $backadmin;
 
-        $state    = (string) $state;
+        $state = (string) $state;
+
+        if ($state !== 'addchannelid' && rxAdminNavRequiresChannelReport()) {
+            rxAdminPanelEntryForceChannelReportSetup($from_id, $GLOBALS['setting'], $textbotlang, $backadmin);
+            if (isset($user) && is_array($user)) { $user['step'] = 'addchannelid'; }
+            return true;
+        }
+
         $msg      = isset($textbotlang['Admin']['Back-menu']) ? $textbotlang['Admin']['Back-menu'] : 'بازگشت';
         $sel      = isset($textbotlang['users']['selectoption']) ? $textbotlang['users']['selectoption'] : $msg;
         $fallback = isset($keyboardadmin) ? $keyboardadmin : null;
@@ -1142,6 +1211,39 @@ if (!function_exists('rxRenderMenuState')) {
     }
 }
 
+if (!function_exists('rxNavCashbackGatewayParent')) {
+    function rxNavCashbackGatewayParent($from_id)
+    {
+        static $map = [
+            'CartManage'                  => 'gw_cart',
+            'trnado'                      => 'gw_trnado',
+            'tonpay'                      => 'gw_tonpay',
+            'cubepay'                     => 'gw_cubepay',
+            'blupal'                      => 'gw_blupal',
+            'atlaspay'                    => 'gw_atlaspay',
+            'tetrapay'                    => 'gw_tetrapay',
+            'NowPaymentsManage'           => 'gw_plisio',
+            'nowpayment_setting_keyboard' => 'gw_nowpayment',
+            'keyboardzarinpal'            => 'gw_zarinpal',
+        ];
+        $raw = null;
+        if (isset($GLOBALS['user']) && is_array($GLOBALS['user']) && isset($GLOBALS['user']['Processing_value'])) {
+            $raw = $GLOBALS['user']['Processing_value'];
+        } elseif (function_exists('select')) {
+            $row = select('user', 'Processing_value', 'id', $from_id, 'select', ['cache' => false]);
+            $raw = is_array($row) ? ($row['Processing_value'] ?? null) : null;
+        }
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data) || !isset($data['cashback_menu']) || !is_string($data['cashback_menu'])) {
+            return null;
+        }
+        return $map[$data['cashback_menu']] ?? null;
+    }
+}
+
 if (!function_exists('rxNavBack')) {
     function rxNavBack($from_id, $originHint = null, $currentStep = null)
     {
@@ -1154,8 +1256,12 @@ if (!function_exists('rxNavBack')) {
             }
             $currentStep = (string) $currentStep;
 
+            $cashbackSharedSteps = ['getcashtarget' => true, 'getcashtargetdays' => true, 'getcashscope' => true];
+
             if (is_string($originHint) && $originHint !== '') {
                 $target = $originHint;
+            } elseif (isset($cashbackSharedSteps[$currentStep]) && ($gwParent = rxNavCashbackGatewayParent($from_id)) !== null) {
+                $target = $gwParent;
             } elseif (rxNavIsMenuStep($currentStep)) {
                 $target = rxNavParent($currentStep);
             } elseif ($currentStep !== '' && $currentStep !== 'home') {

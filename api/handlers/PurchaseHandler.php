@@ -138,7 +138,10 @@ final class PurchaseHandler extends BaseHandler
             'SELECT 1 FROM invoice WHERE username = :u LIMIT 1',
             [':u' => $usernameAc]
         );
-        $remoteCheck = $managePanel->DataUser($panel['name_panel'], $usernameAc);
+        $remoteCheck = null;
+        if (($panel['type'] ?? '') !== 'Manualsale') {
+            $remoteCheck = $managePanel->DataUser($panel['name_panel'], $usernameAc);
+        }
         $usernameWasRenamed = $existsLocal || (is_array($remoteCheck) && isset($remoteCheck['username']));
         if ($usernameWasRenamed) {
             $usernameAc = rand(1000000, 9999999) . '-' . $usernameAc;
@@ -920,7 +923,7 @@ final class PurchaseHandler extends BaseHandler
             'order_id' => $orderId,
             'agent' => $this->user['agent'],
             'phone' => $this->user['number'],
-            'price' => $product['price_product'],
+            'price' => rxFormatToman($product['price_product']),
             'when' => $when,
         ]);
 
@@ -946,13 +949,13 @@ final class PurchaseHandler extends BaseHandler
         $channel = $this->setting['Channel_Report'] ?? '';
         if ((string)$channel === '') return;
 
-        telegram('sendmessage', [
+        rx_sendTopicReport([
             'chat_id'           => $channel,
             'message_thread_id' => $topicId,
             'text'              => $text,
             'parse_mode'        => 'HTML',
             'reply_markup'      => $reply,
-        ]);
+        ], ['flow' => 'miniapp_buy', 'order_id' => $orderId, 'user_id' => (string)$this->user['id']]);
     }
 
     private function reportToChannel(string $text, string $topicId): void

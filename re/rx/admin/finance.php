@@ -60,16 +60,18 @@ if (false) {
     step('GetNameNew', $from_id);
 } elseif ($user['step'] == "GetNameNew") {
     if (!isset($update['message']) && empty($text)) { return; }
-    if (in_array($text, $marzban_list)) {
+    $marzban_list = is_array($marzban_list) ? $marzban_list : [];
+    if (in_array($text, $marzban_list, true)) {
         nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['Repeatpanel'], $backadmin, 'HTML');
         return;
     }
     $typepanel = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
+    if (!rxPanelNameCascade($pdo, (string) $user['Processing_value'], (string) $text)) {
+        outtypepanel($typepanel['type'], $textbotlang['users']['stateus']['error']);
+        step('PanelMenu', $from_id);
+        return;
+    }
     outtypepanel($typepanel['type'], $textbotlang['Admin']['managepanel']['ChangedNmaePanel']);
-    update("user", "Processing_value", $text, "id", $from_id);
-    update("marzban_panel", "name_panel", $text, "name_panel", $user['Processing_value']);
-    update("invoice", "Service_location", $text, "Service_location", $user['Processing_value']);
-    update("product", "Location", $text, "Location", $user['Processing_value']);
     update("user", "Processing_value", $text, "id", $from_id);
     step('PanelMenu', $from_id);
 } elseif (($text == "⁉️ تست اتصال به پنل" || $text == "🔄 تست اتصال مجدد") && $adminrulecheck['rule'] == "administrator") {
@@ -892,11 +894,13 @@ if (false) {
     if (!isset($update['message']) && empty($text)) { return; }
     if ($text == "تایید") {
         $rxPanelsHubKb = isset($adminPanelsMenu) ? $adminPanelsMenu : $keyboardadmin;
-        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['RemovedPanel'], $rxPanelsHubKb, 'HTML');
         $marzban = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
-        $stmt = $pdo->prepare("DELETE FROM marzban_panel WHERE name_panel = :name_panel");
-        $stmt->bindParam(':name_panel', $user['Processing_value'], PDO::PARAM_STR);
-        $stmt->execute();
+        if (!rxPanelNameCascade($pdo, (string) $user['Processing_value'], null)) {
+            nm_adminInstantReply($from_id, $textbotlang['users']['stateus']['error'], $rxPanelsHubKb, 'HTML');
+            step('home', $from_id);
+            return;
+        }
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['RemovedPanel'], $rxPanelsHubKb, 'HTML');
         update("user", "Processing_value", "0", "id", $from_id);
     }
     step('home', $from_id);
@@ -1566,7 +1570,7 @@ $iduser  در ربات  رفع مسدود گردید
     foreach ($PaymentUsers as $paymentUser) {
         $text_order = "🛒 شماره پرداخت  :  <code>{$paymentUser['id_order']}</code>
 🙍‍♂️ شناسه کاربر : <code>{$paymentUser['id_user']}</code>
-💰 مبلغ پرداختی : {$paymentUser['price']} تومان
+💰 مبلغ پرداختی : " . rxFormatToman($paymentUser['price']) . " تومان
 ⚜️ وضعیت پرداخت : {$paymentUser['payment_Status']}
 ⭕️ روش پرداخت : {$paymentUser['Payment_Method']}
 📆 تاریخ خرید :  {$paymentUser['time']}";
@@ -1636,7 +1640,7 @@ $iduser  در ربات  رفع مسدود گردید
     $Balance_user = select("user", "*", "id", $info_product['id_user'], "select");
     $Balance_add_user = $Balance_user['Balance'] + $info_product['price_product'];
     update("user", "Balance", $Balance_add_user, "id", $info_product['id_user']);
-    $textadd = "💎 کاربر عزیز مبلغ {$info_product['price_product']} تومان به موجودی کیف پول تان اضافه گردید.";
+    $textadd = "💎 کاربر عزیز مبلغ " . rxFormatToman($info_product['price_product']) . " تومان به موجودی کیف پول تان اضافه گردید.";
     sendmessage($info_product['id_user'], $textadd, null, 'HTML');
     nm_adminInstantReply($from_id, $textbotlang['Admin']['ManageUser']['RemovedService'], $keyboardadmin, 'HTML');
     Editmessagetext($from_id, $message_id, $text_inline, json_encode(['inline_keyboard' => []]));
@@ -1986,7 +1990,7 @@ $iduser  در ربات  رفع مسدود گردید
 
 <blockquote>آیدی عددی کاربر : {$Payment_report['id_user']}</blockquote>
 <blockquote>نام کاربری کاربر : {$Balance_user['username']}</blockquote>
-<blockquote>مبلغ تراکنش در فاکتور :  {$Payment_report['price']}</blockquote>
+<blockquote>مبلغ تراکنش در فاکتور :  " . rxFormatToman($Payment_report['price']) . "</blockquote>
 <blockquote>مبلغ تراکنش واریزی توسط ادمین : $text</blockquote>
 <blockquote>👤آیدی عددی ادمین تایید کننده : $from_id</blockquote>
 <blockquote>نام کاربری ادمین تایید کننده : @$username</blockquote>";
@@ -2512,7 +2516,7 @@ $iduser  در ربات  رفع مسدود گردید
 👤 نام کاربری اشتراک :  <code>{$OrderUser['username']}</code>
 📍 موقعیت سرویس :  {$OrderUser['Service_location']}
 🛍 نام محصول :  {$OrderUser['name_product']}
-💰 قیمت پرداختی سرویس : {$OrderUser['price_product']} تومان
+💰 قیمت پرداختی سرویس : " . rxFormatToman($OrderUser['price_product']) . " تومان
 ⚜️ حجم سرویس خریداری شده : {$OrderUser['Volume']}
 ⏳ زمان سرویس خریداری شده : {$OrderUser['Service_time']}
 📆 تاریخ خرید : $datatime
@@ -2616,7 +2620,7 @@ $iduser  در ربات  رفع مسدود گردید
 📌 گزارش سرویس
 🔗  نوع سرویس : $extend_type
 🕰 زمان انجام سرویس : {$extend['time']} \n\n($time_jalali)
-💰مبلغ انجام سرویس : {$extend['price']}
+💰مبلغ انجام سرویس : " . rxFormatToman($extend['price']) . "
 👤 آیدی عددی کاربر : {$extend['id_user']}
 👤 نام کاربری کانفیگ: {$extend['username']}";
             nm_adminInstantReply($from_id, $extendtext, null, 'HTML');
@@ -3269,7 +3273,7 @@ $iduser  در ربات  رفع مسدود گردید
         $stmtAtomicRefund->bindValue(':delta', (int) $pricelast, PDO::PARAM_INT);
         $stmtAtomicRefund->bindValue(':uid', $nameloc['id_user'], PDO::PARAM_STR);
         $stmtAtomicRefund->execute();
-        sendmessage($nameloc['id_user'], "💰کاربر گرامی مبلغ $pricelast تومان به موجودی شما اضافه گردید.", null, 'HTML');
+        sendmessage($nameloc['id_user'], "💰کاربر گرامی مبلغ " . rxFormatToman($pricelast) . " تومان به موجودی شما اضافه گردید.", null, 'HTML');
     }
     $ManagePanel->RemoveUser($nameloc['Service_location'], $requestcheck['username']);
     update("cancel_service", "status", "accept", "username", $requestcheck['username']);
@@ -3284,14 +3288,14 @@ $iduser  در ربات  رفع مسدود گردید
     } catch (Throwable $e) {
         error_log('remoceserviceadmin invoice delete failed: ' . $e->getMessage());
     }
-    nm_adminInstantReply($from_id, "❌ مبلغ $pricelast تومان به موجودی کاربر اضافه گردید.", null, 'HTML');
+    nm_adminInstantReply($from_id, "❌ مبلغ " . rxFormatToman($pricelast) . " تومان به موجودی کاربر اضافه گردید.", null, 'HTML');
     sendmessage($nameloc['id_user'], "✅ کاربری گرامی درخواست حذف شما با نام کاربری  {$nameloc['username']} موافقت گردید.", null, 'HTML');
     $text_report = "⭕️ یک ادمین سرویس کاربر که درخواست حذف داشت را تایید کرد
 
 اطلاعات کاربر تایید کننده  :
 
 <blockquote>🪪 آیدی عددی : <code>$from_id</code></blockquote>
-<blockquote>💰 مبلغ بازگشتی : $pricelast تومان</blockquote>
+<blockquote>💰 مبلغ بازگشتی : " . rxFormatToman($pricelast) . " تومان</blockquote>
 <blockquote>👤 نام کاربری : {$requestcheck['username']}</blockquote>
         <blockquote>آیدی عددی درخواست کننده کنسل کردن : {$nameloc['id_user']}</blockquote>";
     if (strlen($setting['Channel_Report']) > 0) {
@@ -3345,14 +3349,14 @@ $iduser  در ربات  رفع مسدود گردید
     } catch (Throwable $e) {
         error_log('getpricebackremove invoice delete failed: ' . $e->getMessage());
     }
-    sendmessage($invoice['id_user'], "💰کاربر گرامی مبلغ $text تومان به موجودی شما اضافه گردید.", null, 'HTML');
+    sendmessage($invoice['id_user'], "💰کاربر گرامی مبلغ " . rxFormatToman($text) . " تومان به موجودی شما اضافه گردید.", null, 'HTML');
     nm_adminInstantReply($from_id, "✅ مبلغ با موفقیت به حساب کاربر اضافه گردید.", $keyboardadmin, 'HTML');
     $text_report = "⭕️ یک ادمین سرویس کاربر که درخواست حذف داشت را تایید کرد
 
 اطلاعات کاربر تایید کننده  :
 
 <blockquote>🪪 آیدی عددی : <code>$from_id</code></blockquote>
-<blockquote>💰 مبلغ بازگشتی : $text تومان</blockquote>
+<blockquote>💰 مبلغ بازگشتی : " . rxFormatToman($text) . " تومان</blockquote>
 <blockquote>👤 نام کاربری : {$invoice['username']}</blockquote>
 <blockquote>آیدی عددی درخواست کننده کنسل کردن : {$invoice['id_user']}</blockquote>";
     if (strlen($setting['Channel_Report']) > 0) {

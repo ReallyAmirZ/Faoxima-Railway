@@ -132,8 +132,8 @@ $datatextbot = array(
     'tonpay' => '',
     'cubepay' => '',
     'blupal' => '',
+    'abangateway' => '',
     'atlaspay' => '',
-    'tetrapay' => '',
     'zarinpal' => '',
     'text_fq' => '',
     'textpaymentnotverify' =>"",
@@ -155,7 +155,7 @@ if ($table_exists) {
         );
     }
     foreach ($data_text_bot as $item) {
-        if (isset($datatextbot[$item['id_text']])) {
+        if (array_key_exists($item['id_text'], $datatextbot) || (is_string($item['text']) && trim($item['text']) !== '')) {
             $datatextbot[$item['id_text']] = $item['text'];
         }
     }
@@ -588,6 +588,36 @@ $blupal = rx_kb_encode([
             ['text' => $textbotlang['Admin']['backmenu'], 'callback_data' => 'blupal_backmenu']
         ]
     ]);
+$variza = rx_kb_encode([
+        [rx_kb_style(['text' => "🏷️ نام نمایشی درگاه واریزا", 'callback_data' => 'variza_name'], 'variza_name', $_rx_gw_styles)],
+        [rx_kb_style(['text' => "🔑 ثبت توکن API واریزا", 'callback_data' => 'variza_apikey'], 'variza_apikey', $_rx_gw_styles)],
+        [rx_kb_style(['text' => "🔐 ثبت کلید وب‌هوک واریزا", 'callback_data' => 'variza_webhooksecret'], 'variza_webhooksecret', $_rx_gw_styles)],
+        [rx_kb_style(['text' => "💰 کش بک واریزا", 'callback_data' => 'variza_cashback'], 'variza_cashback', $_rx_gw_styles)],
+        [
+            rx_kb_style(['text' => "⬇️ کف واریزا", 'callback_data' => 'variza_min'], 'variza_min', $_rx_gw_styles),
+            rx_kb_style(['text' => "⬆️ سقف واریزا", 'callback_data' => 'variza_max'], 'variza_max', $_rx_gw_styles)
+        ],
+        [rx_kb_style(['text' => "📚 آموزش واریزا", 'callback_data' => 'variza_edu'], 'variza_edu', $_rx_gw_styles)],
+        [
+            rx_kb_style(['text' => $textbotlang['Admin']['backadmin'], 'callback_data' => 'variza_back'], 'variza_back', $_rx_gw_styles),
+            ['text' => $textbotlang['Admin']['backmenu'], 'callback_data' => 'variza_backmenu']
+        ]
+    ]);
+$abangateway = rx_kb_encode([
+        [rx_kb_style(['text' => "🏷️ نام نمایشی درگاه آبان گیت وی", 'callback_data' => 'abangateway_name'], 'abangateway_name', $_rx_gw_styles)],
+        [rx_kb_style(['text' => "🔗 ثبت آدرس درگاه آبان گیت وی", 'callback_data' => 'abangateway_url'], 'abangateway_url', $_rx_gw_styles)],
+        [rx_kb_style(['text' => "🔑 ثبت کلید اتصال آبان گیت وی", 'callback_data' => 'abangateway_apikey'], 'abangateway_apikey', $_rx_gw_styles)],
+        [rx_kb_style(['text' => "💰 کش بک آبان گیت وی", 'callback_data' => 'abangateway_cashback'], 'abangateway_cashback', $_rx_gw_styles)],
+        [
+            rx_kb_style(['text' => "⬇️ کف آبان گیت وی", 'callback_data' => 'abangateway_min'], 'abangateway_min', $_rx_gw_styles),
+            rx_kb_style(['text' => "⬆️ سقف آبان گیت وی", 'callback_data' => 'abangateway_max'], 'abangateway_max', $_rx_gw_styles)
+        ],
+        [rx_kb_style(['text' => "📚 آموزش آبان گیت وی", 'callback_data' => 'abangateway_edu'], 'abangateway_edu', $_rx_gw_styles)],
+        [
+            rx_kb_style(['text' => $textbotlang['Admin']['backadmin'], 'callback_data' => 'abangateway_back'], 'abangateway_back', $_rx_gw_styles),
+            ['text' => $textbotlang['Admin']['backmenu'], 'callback_data' => 'abangateway_backmenu']
+        ]
+    ]);
 $atlaspay = rx_kb_encode([
         [rx_kb_style(['text' => "🏷️ نام نمایشی درگاه اطلس‌پی", 'callback_data' => 'atlaspay_name'], 'atlaspay_name', $_rx_gw_styles)],
         [rx_kb_style(['text' => "🔑 ثبت API Key اطلس‌پی", 'callback_data' => 'atlaspay_apikey'], 'atlaspay_apikey', $_rx_gw_styles)],
@@ -601,21 +631,6 @@ $atlaspay = rx_kb_encode([
         [
             rx_kb_style(['text' => $textbotlang['Admin']['backadmin'], 'callback_data' => 'atlaspay_back'], 'atlaspay_back', $_rx_gw_styles),
             ['text' => $textbotlang['Admin']['backmenu'], 'callback_data' => 'atlaspay_backmenu']
-        ]
-    ]);
-$tetrapay = rx_kb_encode([
-        [rx_kb_style(['text' => "🏷️ نام نمایشی درگاه تتراپی", 'callback_data' => 'tetrapay_name'], 'tetrapay_name', $_rx_gw_styles)],
-        [rx_kb_style(['text' => "🔑 ثبت API Key تتراپی", 'callback_data' => 'tetrapay_apikey'], 'tetrapay_apikey', $_rx_gw_styles)],
-        [rx_kb_style(['text' => "🌍 ثبت آدرس سرور API تتراپی", 'callback_data' => 'tetrapay_apiurl'], 'tetrapay_apiurl', $_rx_gw_styles)],
-        [rx_kb_style(['text' => "💰 کش بک تتراپی", 'callback_data' => 'tetrapay_cashback'], 'tetrapay_cashback', $_rx_gw_styles)],
-        [
-            rx_kb_style(['text' => "⬇️ کف تتراپی", 'callback_data' => 'tetrapay_min'], 'tetrapay_min', $_rx_gw_styles),
-            rx_kb_style(['text' => "⬆️ سقف تتراپی", 'callback_data' => 'tetrapay_max'], 'tetrapay_max', $_rx_gw_styles)
-        ],
-        [rx_kb_style(['text' => "📚 آموزش تتراپی", 'callback_data' => 'tetrapay_edu'], 'tetrapay_edu', $_rx_gw_styles)],
-        [
-            rx_kb_style(['text' => $textbotlang['Admin']['backadmin'], 'callback_data' => 'tetrapay_back'], 'tetrapay_back', $_rx_gw_styles),
-            ['text' => $textbotlang['Admin']['backmenu'], 'callback_data' => 'tetrapay_backmenu']
         ]
     ]);
 $keyboardzarinpal = rx_kb_encode([
@@ -678,7 +693,7 @@ $adminPanelsMenu = rx_kb_encode([
         rx_kb_style(['text' => "🔋 قیمت سریع حجم", 'callback_data' => 'admin_volprice'], 'admin_volprice', $_rx_adm_styles)
     ],
     [
-        rx_kb_style(['text' => "🔙 بازگشت به منوی قبل", 'callback_data' => 'adm_hub_main'], 'panelshub_backmenu', $_rx_adm_styles),
+        rx_kb_style(['text' => "🔙 بازگشت به منوی قبل", 'callback_data' => 'panelshub_backmenu'], 'panelshub_backmenu', $_rx_adm_styles),
         rx_kb_style(['text' => "🏠 منوی مدیریت", 'callback_data' => 'adm_hub_main'], 'panelshub_backadmin', $_rx_adm_styles)
     ],
 ]);
@@ -687,7 +702,7 @@ $adminChannelMenu = rx_kb_encode([
     [rx_kb_style(['text' => "📯 تنظیمات کانال", 'callback_data' => 'set_channel'], 'set_channel', $_rx_set_styles)],
     [rx_kb_style(['text' => "📣 گزارشات ربات", 'callback_data' => 'set_reports'], 'set_reports', $_rx_set_styles)],
     [
-        rx_kb_style(['text' => "🔙 بازگشت به منوی قبل", 'callback_data' => 'adm_hub_main'], 'channelhub_backmenu', $_rx_set_styles),
+        rx_kb_style(['text' => "🔙 بازگشت به منوی قبل", 'callback_data' => 'channelhub_backmenu'], 'channelhub_backmenu', $_rx_set_styles),
         rx_kb_style(['text' => "🏠 منوی مدیریت", 'callback_data' => 'adm_hub_main'], 'channelhub_backadmin', $_rx_set_styles)
     ],
 ]);
@@ -698,7 +713,7 @@ $adminUsersMenu = rx_kb_encode([
     [rx_kb_style(['text' => "➕ محدودیت تست برای همه", 'callback_data' => 'set_testlimit'], 'set_testlimit', $_rx_set_styles)],
     [rx_kb_style(['text' => "💵 رسید های تایید نشده", 'callback_data' => 'admin_invoices'], 'admin_invoices', $_rx_adm_styles)],
     [
-        rx_kb_style(['text' => "🔙 بازگشت به منوی قبل", 'callback_data' => 'adm_hub_main'], 'usershub_backmenu', $_rx_adm_styles),
+        rx_kb_style(['text' => "🔙 بازگشت به منوی قبل", 'callback_data' => 'usershub_backmenu'], 'usershub_backmenu', $_rx_adm_styles),
         rx_kb_style(['text' => "🏠 منوی مدیریت", 'callback_data' => 'adm_hub_main'], 'usershub_backadmin', $_rx_adm_styles)
     ],
 ]);
@@ -710,8 +725,11 @@ $trnadoo = getPaySettingValue("statustarnado");
 $tonpayStatus = getPaySettingValue("statustonpay");
 $cubepayStatus = getPaySettingValue("statuscubepay");
 $blupalStatus = getPaySettingValue("statusblupal");
+$varizaStatus = getPaySettingValue("statusvariza");
+$abangatewayStatus = getPaySettingValue("statusabangateway");
+$abangatewayUrl = trim((string) getPaySettingValue("urlabangateway"));
+$abangatewayKey = trim((string) getPaySettingValue("apiabangateway"));
 $atlaspayStatus = getPaySettingValue("statusatlaspay");
-$tetrapayStatus = getPaySettingValue("statustetrapay");
 $paymentverify = getPaySettingValue("checkpaycartfirst");
 $stmt = $pdo->prepare("SELECT * FROM Payment_report WHERE id_user = '$from_id' AND payment_Status = 'paid' ");
 $stmt->execute();
@@ -771,14 +789,20 @@ $step_payment = [
             rx_kb_style(['text' => $datatextbot['blupal'] ?: '💙 بلوپال', 'callback_data' => "blupal"], 'blupal', $_rx_pay_styles)
     ];
     }
+   if($varizaStatus == "onvariza"){
+        $step_payment['inline_keyboard'][] = [
+            rx_kb_style(['text' => $datatextbot['variza'] ?: '💳 واریزا', 'callback_data' => "variza"], 'variza', $_rx_pay_styles)
+    ];
+    }
+   // Offered only when it can take money: on, with an https address and a key.
+   if($abangatewayStatus == "onabangateway" && stripos($abangatewayUrl, 'https://') === 0 && $abangatewayKey !== '' && $abangatewayKey !== '0'){
+        $step_payment['inline_keyboard'][] = [
+            rx_kb_style(['text' => $datatextbot['abangateway'] ?: '💳 آبان گیت وی', 'callback_data' => "abangateway"], 'abangateway', $_rx_pay_styles)
+    ];
+    }
    if($atlaspayStatus == "onatlaspay"){
         $step_payment['inline_keyboard'][] = [
             rx_kb_style(['text' => $datatextbot['atlaspay'] ?: '🌐 اطلس‌پی', 'callback_data' => "atlaspay"], 'atlaspay', $_rx_pay_styles)
-    ];
-    }
-   if($tetrapayStatus == "ontetrapay"){
-        $step_payment['inline_keyboard'][] = [
-            rx_kb_style(['text' => $datatextbot['tetrapay'] ?: '🔷 تتراپی', 'callback_data' => "tetrapay"], 'tetrapay', $_rx_pay_styles)
     ];
     }
     if($zarinpal == "onzarinpal"){

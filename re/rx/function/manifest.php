@@ -16,4 +16,6 @@ return array (
   13 => 'wizard_back.php',
   14 => 'nav_parents.php',
   15 => 'panel_sales_metrics.php',
+  16 => 'statistics_helpers.php',
+  17 => 'receipt_actions.php',
 );

@@ -51,11 +51,11 @@ if (preg_match('/Confirmpay_user_(\w+)_(\w+)/', $datain, $dataget)) {
         $_stmt = $connect->prepare("SELECT * FROM user WHERE id = ? LIMIT 1");
         $_stmt->bind_param("s", $_uid); $_stmt->execute();
         $Balance_id = $_stmt->get_result()->fetch_assoc(); $_stmt->close();
-        $Payment_report['price'] = number_format($Payment_report['price'], 0);
+        $priceFormatted = rxFormatToman($Payment_report['price']);
         $text_report = "💵 پرداخت جدید
 
 <blockquote>آیدی عددی کاربر : $from_id</blockquote>
-<blockquote>مبلغ تراکنش : {$Payment_report['price']}</blockquote>
+<blockquote>مبلغ تراکنش : {$priceFormatted}</blockquote>
 <blockquote>روش پرداخت : درگاه ارزی ریالی اول</blockquote>";
         $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackiranpay2", "select")['ValuePay'];
         $cashbackEligible = !function_exists('rx_cashbackEligibleForKey')
@@ -65,7 +65,7 @@ if (preg_match('/Confirmpay_user_(\w+)_(\w+)/', $datain, $dataget)) {
             $Balance_confrim = intval($Balance_id['Balance']) + $result;
             update("user", "Balance", $Balance_confrim, "id", $user['id']);
             $pricecashback = number_format($pricecashback);
-            $text_report = sprintf($textbotlang['users']['Discount']['gift-deposit'], $result);
+            $text_report = sprintf($textbotlang['users']['Discount']['gift-deposit'], rxFormatToman($result));
             sendmessage($from_id, $text_report, null, 'HTML');
         }
         if (strlen($setting['Channel_Report'] ?? '') > 0) {
@@ -151,7 +151,7 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     if ($datain === 'cv_new') {
         step('card_photo_step', $from_id);
         deletemessage($from_id, $message_id);
-        sendmessage($from_id, "⚠️ احراز هویت کارت به کارت فعال است
+        sendmessage($from_id, $datatextbot['dyn_wallet_card_auth_active_notice'] ?? "⚠️ احراز هویت کارت به کارت فعال است
 
 📸 لطفا تصویر کارت فیزیکی خود را که قصد واریز با آن را دارید، ارسال کنید.
 
@@ -542,7 +542,7 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     }
     $receiptRow = select("Payment_report", "*", "id_order", $orderId, "select");
     if (!$receiptRow || (string) ($receiptRow['id_user'] ?? '') !== (string) $from_id) {
-        sendmessage($from_id, "❌ فاکتور یافت نشد.", $keyboard, 'HTML');
+        sendmessage($from_id, $datatextbot['dyn_wallet_invoice_not_found'] ?? "❌ فاکتور یافت نشد.", $keyboard, 'HTML');
         step('home', $from_id);
         return;
     }
@@ -1040,14 +1040,24 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
         }
     }
     $dateacc = date('Y/m/d H:i:s');
-    $stmt = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'waiting', dec_not_confirmed = 'receipt-submitted', at_updated = :at_updated WHERE id_order = :id_order AND payment_Status = 'pending' AND dec_not_confirmed = 'receipt-uploading'");
+    $stmt = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'waiting', dec_not_confirmed = 'receipt-submitted', card_photo_file_id = :card_photo_file_id, at_updated = :at_updated WHERE id_order = :id_order AND payment_Status = 'pending' AND dec_not_confirmed = 'receipt-uploading'");
     $stmt->execute([
+        ':card_photo_file_id' => $photoid,
         ':at_updated' => $dateacc,
         ':id_order' => $PaymentReport['id_order'],
     ]);
     if ($stmt->rowCount() !== 1) {
         sendmessage($from_id, faoxima_textbot_get('dyn_errors_data_fetch_restart', '❌ خطایی در هنگام دریافت اطلاعات رخ داده است لطفا مراحل را از اول انجام دهید'), $keyboard, 'HTML');
         return;
+    }
+    if (function_exists('clearSelectCache')) {
+        clearSelectCache('Payment_report');
+    }
+    $_verifyReceiptCard = select('Payment_report', 'card_photo_file_id', 'id_order', $PaymentReport['id_order'], 'select', ['cache' => false]);
+    if (empty($_verifyReceiptCard['card_photo_file_id']) && function_exists('rx_log_event')) {
+        rx_log_event('RECEIPT_PHOTO_SAVE_VERIFY_FAILED', 'card_photo_file_id still empty right after commit', [
+            'id_order' => $PaymentReport['id_order'],
+        ]);
     }
 } elseif ($datain == "Discount") {
     $bakinfos = json_encode([
@@ -1094,7 +1104,7 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     $discountlimitadd = intval($checklimit['limitused']) + 1;
     update("Discount", "limitused", $discountlimitadd, "code", $text);
     step('home', $from_id);
-    $text_balance_code = sprintf($textbotlang['users']['Discount']['giftcodesuccess'], $get_codesql['price']);
+    $text_balance_code = sprintf($textbotlang['users']['Discount']['giftcodesuccess'], rxFormatToman($get_codesql['price']));
     sendmessage($from_id, $text_balance_code, $keyboard, 'HTML');
     $stmt = $pdo->prepare("INSERT INTO Giftcodeconsumed (id_user, code) VALUES (:id_user, :code)");
     $stmt->execute([
@@ -1171,8 +1181,9 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     $rxPendingGiftStmt->execute([':reagent' => $from_id]);
     $rxPendingGiftCount = (int) $rxPendingGiftStmt->fetchColumn();
     if ($affiliatescommission['Discount'] == "onDiscountaffiliates") {
+        $rxFmtAffiliateDiscount = rxFormatToman($affiliatescommission['price_Discount'] ?? 0);
         $text_start = "<b>🎁 هدیه عضویت:</b>
-• 🎉 مجموع هدیه: {$affiliatescommission['price_Discount']} تومان
+• 🎉 مجموع هدیه: {$rxFmtAffiliateDiscount} تومان
 • 🔻 ۵۰٪ برای شما (معرف)
 • 🔻 ۵۰٪ برای زیرمجموعه (کاربر جدید)
 ";
@@ -1197,6 +1208,25 @@ $text_porsant
 
 <b>📢 دعوت کن، هدیه بگیر، رشد کن!</b>
 ";
+    $rxAffiliateInfoTpl = (string) ($textbotlang['users']['affiliates']['affiliateinfo'] ?? '');
+    if (trim($rxAffiliateInfoTpl) !== '') {
+        try {
+            $rxAffiliateInfoText = vsprintf($rxAffiliateInfoTpl, [
+                rxFormatToman($affiliatescommission['price_Discount'] ?? 0),
+                $Percent_porsant,
+                $user['affiliatescount'],
+                $orders_count,
+                $sum_order,
+                $rxCommissionEarned,
+                $rxPendingGiftCount,
+            ]);
+        } catch (\Throwable $rxAffiliateInfoErr) {
+            $rxAffiliateInfoText = false;
+        }
+        if (is_string($rxAffiliateInfoText) && trim($rxAffiliateInfoText) !== '') {
+            $textaffiliates = $rxAffiliateInfoText;
+        }
+    }
 
     sendmessage($from_id, $textaffiliates, $keyboard_share, 'HTML');
 } elseif ($datain == "get_gift_start") {
@@ -1307,14 +1337,18 @@ $text_porsant
     $addbalancediscount = number_format($price_gift_Start, 0);
     sendmessage($reagent['reagent'], $datatextbot['dyn_affiliates_extra_gift_credited_inviter'] ?? "🎉 یک نفر با معرفی شما وارد شد! هدیه به حساب شما واریز شد.", null, 'html');
     sendmessage($from_id, $datatextbot['dyn_affiliates_extra_gift_activated'] ?? "🎉 هدیه عضویت برای شما فعال شد!", null, 'html');
+    $rxFmtUserBalanceBefore = rxFormatToman($user['Balance']);
+    $rxFmtUserBalanceAfter = rxFormatToman($Balance_add_user);
+    $rxFmtReagentBalanceBefore = rxFormatToman($useraffiliates['Balance']);
+    $rxFmtReagentBalanceAfter = rxFormatToman($Balance_add_regent);
     $report_join_gift = "🎁 پرداخت هدیه عضویت
 <blockquote> -آیدی عددی : $from_id</blockquote>
 <blockquote> - نام کاربری : @$username</blockquote>
 <blockquote> - آیدی عددی معرف : {$reagent['reagent']}</blockquote>
-<blockquote> - موجودی زیرمجموعه قبل از هدیه : {$user['Balance']}</blockquote>
-<blockquote> - موجودی زیرمجموعه بعد از هدیه : $Balance_add_user</blockquote>
-<blockquote>  - موجودی معرف قبل از هدیه : {$useraffiliates['Balance']}</blockquote>
-<blockquote> - موجودی معرف بعد از هدیه : $Balance_add_regent</blockquote>
+<blockquote> - موجودی زیرمجموعه قبل از هدیه : {$rxFmtUserBalanceBefore}</blockquote>
+<blockquote> - موجودی زیرمجموعه بعد از هدیه : {$rxFmtUserBalanceAfter}</blockquote>
+<blockquote>  - موجودی معرف قبل از هدیه : {$rxFmtReagentBalanceBefore}</blockquote>
+<blockquote> - موجودی معرف بعد از هدیه : {$rxFmtReagentBalanceAfter}</blockquote>
  ";
     if (strlen($setting['Channel_Report'] ?? '') > 0) {
         telegram('sendmessage', [
@@ -1449,7 +1483,7 @@ $text_porsant
         $__allowNegEv = ($user['agent'] === 'n2') ? (int)($user['maxbuyagent'] ?? 0) : 0;
         $__chargeEv = balance_atomic_charge($from_id, (float)$volume, $__allowNegEv);
         if (empty($__chargeEv['ok'])) {
-            sendmessage($from_id, "❌ موجودی کافی نیست (تلاش هم‌زمان شناسایی شد). یک بار دیگر تلاش کنید.", null, 'HTML');
+            sendmessage($from_id, $datatextbot['dyn_errors_concurrency_insufficient_stock'] ?? "❌ موجودی کافی نیست (تلاش هم‌زمان شناسایی شد). یک بار دیگر تلاش کنید.", null, 'HTML');
             return;
         }
         $Balance_Low_user = $__chargeEv['new_balance'];

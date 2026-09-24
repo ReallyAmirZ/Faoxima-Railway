@@ -368,17 +368,23 @@ if (in_array($text, $textadmin) || $datain == "admin") {
             'getmainblupal' => $blupal,
             'getmaxblupal' => $blupal,
             'helpblupal' => $blupal,
+            'apivariza' => $variza,
+            'variza_webhook_secret' => $variza,
+            'getcashvariza' => $variza,
+            'getmainvariza' => $variza,
+            'getmaxvariza' => $variza,
+            'helpvariza' => $variza,
+            'urlabangateway' => $abangateway,
+            'apiabangateway' => $abangateway,
+            'getcashabangateway' => $abangateway,
+            'getmainabangateway' => $abangateway,
+            'getmaxabangateway' => $abangateway,
+            'helpabangateway' => $abangateway,
             'apiatlaspay' => $atlaspay,
             'getcashatlaspay' => $atlaspay,
             'getmainatlaspay' => $atlaspay,
             'getmaxatlaspay' => $atlaspay,
             'helpatlaspay' => $atlaspay,
-            'apitetrapay' => $tetrapay,
-            'apiurltetrapay' => $tetrapay,
-            'getcashtetrapay' => $tetrapay,
-            'getmaintetrapay' => $tetrapay,
-            'getmaxtetrapay' => $tetrapay,
-            'helptetrapay' => $tetrapay,
             'changecard' => $CartManage,
             'getnamecard' => $CartManage,
             'getcardremove' => $CartManage,
@@ -392,8 +398,9 @@ if (in_array($text, $textadmin) || $datain == "admin") {
             'gettexttonpay' => $tonpay,
             'gettextcubepay' => $cubepay,
             'gettextblupal' => $blupal,
+            'gettextvariza' => $variza,
+            'gettextabangateway' => $abangateway,
             'gettextatlaspay' => $atlaspay,
-            'gettexttetrapay' => $tetrapay,
             'gettextiranpay1' => $iranpaykeyboard,
             'gettextzarinpal' => $keyboardzarinpal,
             'merchant_zarinpal' => $keyboardzarinpal,
@@ -707,7 +714,13 @@ if (in_array($text, $textadmin) || $datain == "admin") {
     step('addchannel', $from_id);
 } elseif ($user['step'] == "addchannel") {
     if (!isset($update['message']) && empty($text)) { return; }
-    savedata("clear", "link", $text);
+    $rxChannelChatId = function_exists('rx_normalize_channel_chat_id') ? rx_normalize_channel_chat_id($text) : trim((string) $text);
+    if ($rxChannelChatId === '') {
+        $wizKb = function_exists('rx_get_channel_wizard_back_keyboard') ? rx_get_channel_wizard_back_keyboard() : $backadmin;
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['channel']['changechannel'], $wizKb, 'HTML');
+        return;
+    }
+    savedata("clear", "link", $rxChannelChatId);
     $wizKb = function_exists('rx_get_channel_wizard_back_keyboard') ? rx_get_channel_wizard_back_keyboard() : $backadmin;
     nm_adminInstantReply($from_id, "📌 یک نام برای دکمه عضویت چنل انتخاب نمایید.", $wizKb, 'HTML');
     step('getremark', $from_id);
@@ -1041,47 +1054,34 @@ if (in_array($text, $textadmin) || $datain == "admin") {
     nm_adminInstantReply($from_id, $textbotlang['Admin']['channel']['description'], $channelkeyboard, 'HTML');
 } elseif ($text == $textbotlang['Admin']['Status']['btn'] || $datain == "stat_all_bot") {
     $Balanceall = select("user", "SUM(Balance)", null, null, "select")['SUM(Balance)'];
-    $statistics = select("user", "*", null, null, "count");
+    $statistics = rx_stats_total_users($pdo);
     $sumpanel = select("marzban_panel", "*", null, null, "count");
     $sql1 = "SELECT COUNT(id) AS count FROM user WHERE agent != 'f'";
     $stmt1 = $pdo->query($sql1);
     $agentsum = $stmt1->fetch(PDO::FETCH_ASSOC)['count'];
     $agentsumn = select("user", "COUNT(id)", "agent", "n", "select")['COUNT(id)'];
     $agentsumn2 = select("user", "COUNT(id)", "agent", "n2", "select")['COUNT(id)'];
-    $sql1 = "SELECT COUNT(*) AS invoice_count FROM invoice WHERE (status = 'active' OR status = 'end_of_time' OR status = 'end_of_volume' OR status = 'sendedwarn' OR status = 'send_on_hold') AND name_product != 'سرویس تست'";
+    $sql1 = "SELECT COUNT(*) AS invoice_count FROM invoice WHERE " . rx_stats_operational_service_predicate();
     $stmt1 = $pdo->query($sql1);
     $invoiceactive = $stmt1->fetch(PDO::FETCH_ASSOC)['invoice_count'];
-    $sqlall = "SELECT COUNT(*) AS invoice_count FROM invoice WHERE status != 'Unpaid' AND name_product != 'سرویس تست'";
-    $sqlall = $pdo->query($sqlall);
-    $invoice = $sqlall->fetch(PDO::FETCH_ASSOC)['invoice_count'];
-    $sql2 = "SELECT SUM(price_product) AS total_price FROM invoice WHERE (status = 'active' OR status = 'end_of_time' OR status = 'end_of_volume' OR status = 'sendedwarn' OR status = 'send_on_hold') AND name_product != 'سرویس تست'";
+    $invoice = rx_stats_total_sales_count($pdo);
+    $sql2 = "SELECT SUM(price_product) AS total_price FROM invoice WHERE " . rx_stats_operational_service_predicate();
     $stmt2 = $pdo->query($sql2);
     $invoicesum = $stmt2->fetch(PDO::FETCH_ASSOC)['total_price'];
-    $sql33 = "SELECT SUM(price_product) AS total_price FROM invoice WHERE status!= 'Unpaid' AND name_product != 'سرویس تست'";
-    $sql33 = $pdo->query($sql33);
-    $invoiceSumRow = $sql33->fetch(PDO::FETCH_ASSOC);
-    $invoiceTotal = isset($invoiceSumRow['total_price']) ? (float) $invoiceSumRow['total_price'] : 0;
+    $invoiceTotal = rx_stats_total_sales_amount($pdo);
     $invoicesumall = number_format($invoiceTotal, 0);
-    $sql3 = "SELECT SUM(price) AS total_extend FROM service_other WHERE type = 'extend_user'";
-    $stmt3 = $pdo->query($sql3);
-    $extendSumRow = $stmt3->fetch(PDO::FETCH_ASSOC);
-    $extendsum = isset($extendSumRow['total_extend']) ? (float) $extendSumRow['total_extend'] : 0;
+    $extendsum = rx_stats_extend_paid_sum($pdo);
     $count_usertest = select("invoice", "*", "name_product", "سرویس تست", "count");
     $timeacc = jdate('H:i:s', time());
-    $stmt2 = $pdo->prepare("SELECT COUNT(DISTINCT id_user) as count FROM `invoice` WHERE Status != 'Unpaid'");
-    $stmt2->execute();
-    $statisticsorder = $stmt2->fetch(PDO::FETCH_ASSOC)['count'];
-    $sqlsum = "SELECT SUM(price) AS sumpay , Payment_Method,COUNT(price) AS countpay FROM Payment_report WHERE payment_Status = 'paid' AND Payment_Method NOT IN ('add balance by admin','low balance by admin') GROUP BY  Payment_Method;";
-    $stmt = $pdo->prepare($sqlsum);
-    $stmt->execute();
-    $statispay = $stmt->fetchAll();
+    $statisticsorder = rx_stats_paying_users_count($pdo);
+    $statispay = rx_stats_real_payment_totals($pdo);
     $date = date("Y-m-d");
     $timeacc = jdate('H:i:s', time());
     $start_time = date('d.m.Y', strtotime("-1 days")) . " 00:00:00";
     $end_time = date('d.m.Y', strtotime("-1 days")) . " 23:59:59";
     $start_time_timestamp = strtotime($start_time);
     $end_time_timestamp = strtotime($end_time);
-    $sql = "SELECT SUM(price_product) FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND (status = 'active' OR status = 'end_of_time'  OR status = 'end_of_volume' OR Status = 'send_on_hold' OR Status = 'sendedwarn') AND name_product != 'سرویس تست'";
+    $sql = "SELECT SUM(price_product) FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND " . rx_stats_operational_service_predicate();
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time_timestamp);
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
@@ -1094,7 +1094,7 @@ if (in_array($text, $textadmin) || $datain == "admin") {
     $statisticsorder = (int) ($statisticsorder ?? 0);
     $paycount = "";
     $ratecustomer = round(safe_divide($statisticsorder * 100, $statistics, 0), 2);
-    $averagePurchase = safe_divide($invoicesum, $statisticsorder, 0);
+    $averagePurchase = safe_divide($invoiceTotal, $statisticsorder, 0);
     $avgbuy_customer = $averagePurchase > 0 ? number_format($averagePurchase) : '0';
     $monthe_buy = number_format($suminvoiceday * 30);
     $percent_of_extend = round(safe_divide($extendsum * 100, $invoicesum, 0), 2);
@@ -1115,6 +1115,7 @@ if (in_array($text, $textadmin) || $datain == "admin") {
             'tonpay' => $datatextbot['tonpay'] ?? 'tonpay',
             'cubepay' => $datatextbot['cubepay'] ?? 'cubepay',
             'blupal' => $datatextbot['blupal'] ?? 'blupal',
+            'abangateway' => $datatextbot['abangateway'] ?? 'abangateway',
             'atlaspay' => $datatextbot['atlaspay'] ?? 'atlaspay',
             'tetrapay' => $datatextbot['tetrapay'] ?? 'tetrapay',
             'paymentnotverify' => $datatextbot['textpaymentnotverify'] ?? 'paymentnotverify',
@@ -1173,7 +1174,7 @@ $paycount
     step('home', $from_id);
 } elseif ($datain == "hoursago_stat") {
     $desired_date_time_start = time() - 3600;
-    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND Status != 'Unpaid'  AND name_product != 'سرویس تست'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND " . rx_stats_historical_sale_predicate();
     $stmt = $pdo->prepare($sql);
     $time_current = time();
     $stmt->bindParam(':requestedDate', $desired_date_time_start);
@@ -1188,7 +1189,7 @@ $paycount
     $stmt->bindParam(':requestedDateend', $time_current);
     $stmt->execute();
     $count_test = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
-    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  time  >= NOW() - INTERVAL 1 HOUR AND type = 'extend_user' AND status != 'unpaid'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  time  >= NOW() - INTERVAL 1 HOUR AND type = 'extend_user' AND status = 'paid'";
     $stmt = $pdo->prepare($sql);
     $stmt->execute();
     $extend_stat = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1244,7 +1245,7 @@ $paycount
     $end_time = date('Y/m/d', strtotime("-1 days")) . " 23:59:59";
     $start_time_timestamp = strtotime($start_time);
     $end_time_timestamp = strtotime($end_time);
-    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND Status != 'Unpaid'  AND name_product != 'سرویس تست'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND " . rx_stats_historical_sale_predicate();
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time_timestamp);
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
@@ -1258,7 +1259,7 @@ $paycount
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
     $stmt->execute();
     $count_test = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
-    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status != 'unpaid'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status = 'paid'";
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time);
     $stmt->bindParam(':requestedDateend', $end_time);
@@ -1324,7 +1325,7 @@ $paycount
     $end_time = date('Y/m/d H:i:s');
     $start_time_timestamp = strtotime($start_time);
     $end_time_timestamp = strtotime($end_time);
-    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND Status != 'Unpaid' AND name_product != 'سرویس تست'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND " . rx_stats_historical_sale_predicate();
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time_timestamp);
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
@@ -1338,7 +1339,7 @@ $paycount
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
     $stmt->execute();
     $count_test = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
-    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status != 'unpaid'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status = 'paid'";
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time);
     $stmt->bindParam(':requestedDateend', $end_time);
@@ -1406,7 +1407,7 @@ $paycount
     $end_time = $lastDayLastMonth->format('Y/m/d');
     $start_time_timestamp = strtotime($start_time);
     $end_time_timestamp = strtotime($end_time);
-    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND Status != 'Unpaid'  AND name_product != 'سرویس تست'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND " . rx_stats_historical_sale_predicate();
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time_timestamp);
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
@@ -1420,7 +1421,7 @@ $paycount
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
     $stmt->execute();
     $count_test = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
-    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status != 'unpaid'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status = 'paid'";
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time);
     $stmt->bindParam(':requestedDateend', $end_time);
@@ -1488,7 +1489,7 @@ $paycount
     $end_time = $lastDayLastMonth->format('Y/m/d');
     $start_time_timestamp = strtotime($start_time);
     $end_time_timestamp = strtotime($end_time);
-    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND Status != 'Unpaid'  AND name_product != 'سرویس تست'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND " . rx_stats_historical_sale_predicate();
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time_timestamp);
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
@@ -1502,7 +1503,7 @@ $paycount
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
     $stmt->execute();
     $count_test = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
-    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status != 'unpaid'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status = 'paid'";
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time);
     $stmt->bindParam(':requestedDateend', $end_time);
@@ -1586,7 +1587,7 @@ $paycount
     $end_time = $text . "23:59:00";
     $start_time_timestamp = strtotime($start_time);
     $end_time_timestamp = strtotime($end_time);
-    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend)  AND  Status != 'Unpaid' AND name_product != 'سرویس تست'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price_product) as sum FROM invoice WHERE (time_sell BETWEEN :requestedDate AND :requestedDateend) AND " . rx_stats_historical_sale_predicate();
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time_timestamp);
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
@@ -1600,7 +1601,7 @@ $paycount
     $stmt->bindParam(':requestedDateend', $end_time_timestamp);
     $stmt->execute();
     $count_test = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
-    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status != 'unpaid'";
+    $sql = "SELECT COUNT(*) AS count,SUM(price) as sum FROM service_other WHERE  (time BETWEEN :requestedDate AND :requestedDateend) AND type = 'extend_user' AND status = 'paid'";
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':requestedDate', $start_time);
     $stmt->bindParam(':requestedDateend', $end_time);
@@ -2560,7 +2561,7 @@ elseif ($datain == "systemsms") {
             $from_id,
             $message_id,
             nm_buildBroadcastStatusText($broadcastStatus),
-            nm_buildBroadcastStatusKeyboard(),
+            nm_buildBroadcastStatusKeyboard($broadcastStatus),
             'HTML'
         );
         return;
@@ -2619,7 +2620,7 @@ elseif ($datain == "systemsms") {
         $from_id,
         $message_id,
         nm_buildBroadcastStatusText($broadcastStatus),
-        nm_buildBroadcastStatusKeyboard(),
+        nm_buildBroadcastStatusKeyboard($broadcastStatus),
         'HTML'
     );
     if (!empty($callback_query_id)) {
@@ -2633,6 +2634,43 @@ elseif ($datain == "systemsms") {
         ]);
     }
     return;
+} elseif (preg_match('/^broadcast_resume_([0-9a-f]{12})$/', $datain, $rxResumeMatch)) {
+    $rxResumeResult = 'not_found';
+    if (function_exists('rx_broadcast_info_update')) {
+        rx_broadcast_info_update('cronbot/info', $rxResumeMatch[1], static function (array &$c) use (&$rxResumeResult) {
+            if (!rx_broadcast_resume_now($c, true)) {
+                $rxResumeResult = 'not_paused';
+                return false;
+            }
+            $rxResumeResult = 'resumed';
+        });
+    }
+    $rxResumeToast = [
+        'resumed'    => '▶️ عملیات از همان نقطه ادامه می‌یابد (حداکثر تا یک دقیقه دیگر).',
+        'not_paused' => 'این عملیات در حالت توقف نیست.',
+        'not_found'  => 'این عملیات دیگر وجود ندارد یا لغو شده است.',
+    ][$rxResumeResult];
+    if (!empty($callback_query_id)) {
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text'              => $rxResumeToast,
+            'show_alert'        => $rxResumeResult !== 'resumed',
+            'cache_time'        => 0,
+        ]);
+    }
+    $broadcastStatus = function_exists('nm_getBroadcastStatus') ? nm_getBroadcastStatus() : null;
+    if ($broadcastStatus !== null) {
+        Editmessagetext(
+            $from_id,
+            $message_id,
+            nm_buildBroadcastStatusText($broadcastStatus),
+            nm_buildBroadcastStatusKeyboard($broadcastStatus),
+            'HTML'
+        );
+    } else {
+        Editmessagetext($from_id, $message_id, "❌ عملیات ارسال پیامی برای ادامه وجود ندارد.", null, 'HTML');
+    }
+    return;
 } elseif (preg_match('/^typeservice-(\w+)/', $datain, $dataget)) {
 
     $broadcastStatus = function_exists('nm_getBroadcastStatus') ? nm_getBroadcastStatus() : null;
@@ -2641,7 +2679,7 @@ elseif ($datain == "systemsms") {
             $from_id,
             $message_id,
             nm_buildBroadcastStatusText($broadcastStatus),
-            nm_buildBroadcastStatusKeyboard(),
+            nm_buildBroadcastStatusKeyboard($broadcastStatus),
             'HTML'
         );
         if (!empty($callback_query_id)) {
@@ -3199,13 +3237,17 @@ $textday
     }
 } elseif ($datain == "cancel_sendmessage") {
     @file_put_contents('users.json', json_encode(array()));
-    @unlink('cronbot/users.json');
-    @unlink('cronbot/users.txt');
-    @unlink('cronbot/users.txt.new');
-    @unlink('cronbot/users.txt.tail.tmp');
-    @unlink('cronbot/info');
+    if (function_exists('rx_broadcast_cancel')) {
+        rx_broadcast_cancel('cronbot');
+    } else {
+        @unlink('cronbot/users.json');
+        @unlink('cronbot/users.txt');
+        @unlink('cronbot/users.txt.new');
+        @unlink('cronbot/users.txt.tail.tmp');
+        @unlink('cronbot/info');
+    }
     deletemessage($from_id, $message_id);
-    nm_adminInstantReply($from_id, "📌 ارسال پیام لغو گردید.", null, 'HTML');
+    nm_adminInstantReply($from_id, "❌ عملیات ارسال پیام لغو شد و قابل ادامه نیست.", null, 'HTML');
 }
 
 elseif ($text == "📝 تنظیم متن ربات" && $adminrulecheck['rule'] == "administrator") {
@@ -4772,13 +4814,8 @@ $caption";
 } elseif ($text == "🏬 تنظیمات فروشگاه" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, $textbotlang['users']['selectoption'], $shopkeyboard, 'HTML');
 } elseif ($text == "🛍 افزودن محصول" && $adminrulecheck['rule'] == "administrator") {
-    $locationproduct = select("marzban_panel", "*", null, null, "count");
-    if ($locationproduct == 0) {
-        nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['nullpaneladmin'], null, 'HTML');
-        return;
-    }
-    nm_adminInstantReply($from_id, $textbotlang['Admin']['Product']['AddProductStepOne'], $backadmin, 'HTML');
-    step('get_limit', $from_id);
+    nm_adminInstantReply($from_id, "⚠️ افزودن محصول از طریق ربات غیرفعال است.\n\nبرای ساخت محصول جدید و دسترسی به تمام تنظیمات محصول، لطفاً از پنل مدیریت وب استفاده کنید.", $keyboard_shop_manage, 'HTML');
+    step('home', $from_id);
 } elseif ($user['step'] == "get_limit") {
     if (strlen($text) > 150) {
         nm_adminInstantReply($from_id, "❌ نام محصول باید کمتر از 150 کاراکتر باشد", $backadmin, 'HTML');
@@ -4996,70 +5033,26 @@ $caption";
 👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
 🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
 ⚜️ نام کاربری: @{$Balance_id['username']}
-💎 موجودی بعد از تایید : {$Balance_id['Balance']}
+💎 موجودی بعد از تایید : " . rxFormatToman($Balance_id['Balance']) . "
 💸 مبلغ پرداختی: $format_price_cart تومان
 ";
         Editmessagetext($_receipt_chat_id, $_receipt_msg_id, $textconfrom, $Confirm_pay, 'HTML', $_receipt_thread_id > 0 ? $_receipt_thread_id : null);
         return;
     }
 
-    try {
-        $atomicStmt = $pdo->prepare(
-            "UPDATE Payment_report SET payment_Status = 'processing', at_updated = :at_updated WHERE id_order = :id_order AND payment_Status = 'waiting'"
-        );
-        $atomicStmt->bindValue(':id_order', $Payment_report['id_order'], PDO::PARAM_STR);
-        $atomicStmt->bindValue(':at_updated', date('Y/m/d H:i:s'), PDO::PARAM_STR);
-        $atomicStmt->execute();
-        if ($atomicStmt->rowCount() === 0) {
-            if (function_exists('rx_log_event')) {
-                rx_log_event('ADMIN_CONFIRM_PAY_RACE', 'Confirm_pay raced with another admin; dropping duplicate', [
-                    'id_order' => $Payment_report['id_order'],
-                    'admin_id' => $from_id,
-                ]);
-            }
-            telegram('answerCallbackQuery', array(
-                'callback_query_id' => $callback_query_id,
-                'text' => $textbotlang['Admin']['Payment']['reviewedpayment'],
-                'show_alert' => true,
-                'cache_time' => 0,
-            ));
-            return;
-        }
-    } catch (Throwable $atomicErr) {
-        if (function_exists('rx_log_event')) {
-            rx_log_event('ADMIN_CONFIRM_PAY_DB_ERROR', 'Atomic mark-as-paid failed', [
-                'id_order' => $Payment_report['id_order'],
-                'err' => $atomicErr->getMessage(),
-            ]);
-        }
+    $rxConfirmResult = rxReceiptConfirm($order_id, ['actor_id' => $from_id, 'actor_label' => (string) $from_id]);
+
+    if (!$rxConfirmResult['ok'] && in_array($rxConfirmResult['reason'] ?? '', ['race_lost', 'already_paid', 'already_final', 'not_waiting'], true)) {
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => $textbotlang['Admin']['Payment']['reviewedpayment'],
+            'show_alert' => true,
+            'cache_time' => 0,
+        ));
         return;
     }
-    if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
-    $_confirm_pay_kb = $Confirm_pay;
-    $Confirm_pay = null;
-    DirectPayment($order_id);
-    $Confirm_pay = $_confirm_pay_kb;
-    $Payment_report_after = select("Payment_report", "*", "id_order", $order_id, "select", ['cache' => false]);
-    $directPaymentDone = is_array($Payment_report_after) && intval($Payment_report_after['direct_payment_done'] ?? 0) === 1;
-    $alreadyPaid = is_array($Payment_report_after) && $Payment_report_after['payment_Status'] === 'paid';
-    if (!$alreadyPaid && $directPaymentDone) {
-        $finalizeStmt = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'paid' WHERE id_order = :id_order AND payment_Status = 'processing'");
-        $finalizeStmt->bindValue(':id_order', $order_id, PDO::PARAM_STR);
-        $finalizeStmt->execute();
-        $alreadyPaid = $finalizeStmt->rowCount() > 0;
-        if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
-    }
-    if (!$alreadyPaid && !$directPaymentDone) {
-        $rollbackStmt = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'waiting' WHERE id_order = :id_order AND payment_Status = 'processing'");
-        $rollbackStmt->bindValue(':id_order', $order_id, PDO::PARAM_STR);
-        $rollbackStmt->execute();
-        if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
-        if (function_exists('rx_log_event')) {
-            rx_log_event('ADMIN_CONFIRM_PAY_FULFILL_FAILED', 'Confirm_pay claimed order but DirectPayment did not complete; rolled back to waiting', [
-                'id_order' => $order_id,
-                'admin_id' => $from_id,
-            ]);
-        }
+
+    if (!$rxConfirmResult['ok']) {
         telegram('answerCallbackQuery', array(
             'callback_query_id' => $callback_query_id,
             'text' => "❌ تکمیل عملیات با خطا مواجه شد، دوباره تلاش کنید",
@@ -5068,106 +5061,6 @@ $caption";
         ));
         return;
     }
-
-    if (!empty($Payment_report['card_photo_file_id']) && !empty($Payment_report['card_last4'])) {
-        $_vc_uid  = (string)$Payment_report['id_user'];
-        $_vc_l4   = (string)$Payment_report['card_last4'];
-        $_vc_chk  = $pdo->prepare("SELECT id FROM verified_cards WHERE user_id = ? AND last4 = ? LIMIT 1");
-        $_vc_chk->execute([$_vc_uid, $_vc_l4]);
-        if ($_vc_chk->rowCount() === 0) {
-            $pdo->prepare("INSERT INTO verified_cards (user_id, last4, created_at) VALUES (?, ?, ?)")
-                ->execute([$_vc_uid, $_vc_l4, time()]);
-        }
-    }
-
-    $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackcart", "select")['ValuePay'];
-    $Balance_id = select("user", "*", "id", $Payment_report['id_user'], "select");
-    $cashbackEligible = !function_exists('rx_cashbackEligibleForKey')
-        || rx_cashbackEligibleForKey("chashbackcart", $Balance_id['register'] ?? null, $Payment_report['id_invoice'] ?? null, $Balance_id['id'] ?? null, $Payment_report['id_order'] ?? null);
-    if ($cashbackEligible && $pricecashback != "0") {
-        $result = round(($Payment_report['price'] * $pricecashback) / 100);
-
-        $stmtCashback = $pdo->prepare("UPDATE user SET Balance = Balance + :delta WHERE id = :uid");
-        $stmtCashback->bindValue(':delta', (int) round($result), PDO::PARAM_INT);
-        $stmtCashback->bindValue(':uid', $Balance_id['id'], PDO::PARAM_STR);
-        $stmtCashback->execute();
-        if (function_exists('wallet_ledger_record')) {
-            wallet_ledger_record($Balance_id['id'], 'credit', $result, 'cashback', 'هدیه بازگشت وجه کارت به کارت', $Payment_report['id_order']);
-        }
-        $pricecashback = number_format($pricecashback);
-        $text_report = "🎁 کاربر عزیز مبلغ $result تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
-        sendmessage($Balance_id['id'], $text_report, null, 'HTML');
-    }
-    $Payment_report['price'] = number_format($Payment_report['price']);
-    $text_report = "📣 یک ادمین رسید پرداخت  را تایید کرد.
-
-اطلاعات :
-<blockquote>💸 روش پرداخت : {$Payment_report['Payment_Method']}</blockquote>
-<blockquote>👤آیدی عددی  ادمین تایید کننده : $from_id</blockquote>
-<blockquote>💰 مبلغ پرداخت : {$Payment_report['price']}</blockquote>
-<blockquote>👤 ایدی عددی کاربر : <code>{$Payment_report['id_user']}</code></blockquote>
-<blockquote>👤 نام کاربری کاربر : @{$Balance_id['username']}</blockquote>
-<blockquote>کد پیگیری پرداحت : $order_id</blockquote>";
-    if (strlen($setting['Channel_Report']) > 0) {
-        telegram('sendmessage', [
-            'chat_id' => $setting['Channel_Report'],
-            'message_thread_id' => $paymentreports,
-            'text' => $text_report,
-            'parse_mode' => "HTML"
-        ]);
-    }
-    $textconfrom = "✅ پرداخت توسط ادمین تایید شده
-👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
-🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
-⚜️ نام کاربری: @{$Balance_id['username']}
-💎 موجودی بعد از تایید : {$Balance_id['Balance']}
-💸 مبلغ پرداختی: $format_price_cart تومان
-";
-    $_receiptTargets = [['chat_id' => (string)$_receipt_chat_id, 'message_id' => (int)$_receipt_msg_id, 'thread_id' => $_receipt_thread_id > 0 ? $_receipt_thread_id : null]];
-    $_privateReceiptTargetsRaw = (string)($Payment_report['private_receipt_targets'] ?? '');
-    $_privateReceiptTargets = $_privateReceiptTargetsRaw !== '' ? json_decode($_privateReceiptTargetsRaw, true) : [];
-    if (is_array($_privateReceiptTargets)) {
-        foreach ($_privateReceiptTargets as $_target) {
-            $_targetChatId = (string)($_target['chat_id'] ?? '');
-            $_targetMsgId = (int)($_target['message_id'] ?? 0);
-            if ($_targetChatId === '' || $_targetMsgId <= 0) {
-                continue;
-            }
-            $_receiptTargets[] = ['chat_id' => $_targetChatId, 'message_id' => $_targetMsgId, 'thread_id' => null];
-        }
-    }
-    $_seenReceiptTargets = [];
-    foreach ($_receiptTargets as $_target) {
-        $_dedupKey = $_target['chat_id'] . ':' . $_target['message_id'];
-        if (isset($_seenReceiptTargets[$_dedupKey])) {
-            continue;
-        }
-        $_seenReceiptTargets[$_dedupKey] = true;
-        try {
-            $_editResult = Editmessagetext($_target['chat_id'], $_target['message_id'], $textconfrom, $Confirm_pay, 'HTML', $_target['thread_id']);
-            if ((!is_array($_editResult) || empty($_editResult['ok'])) && function_exists('rx_log_event')) {
-                rx_log_event('ADMIN_CONFIRM_RECEIPT_EDIT_FAILED', 'Editmessagetext returned failure for a receipt target', [
-                    'id_order' => $Payment_report['id_order'],
-                    'chat_id' => $_target['chat_id'],
-                    'message_id' => $_target['message_id'],
-                    'desc' => is_array($_editResult) ? (string)($_editResult['description'] ?? '') : '',
-                ]);
-            }
-        } catch (Throwable $_e) {
-            if (function_exists('rx_log_event')) {
-                rx_log_event('ADMIN_CONFIRM_RECEIPT_EDIT_FAILED', 'Editmessagetext failed for a receipt target', [
-                    'id_order' => $Payment_report['id_order'],
-                    'chat_id' => $_target['chat_id'],
-                    'message_id' => $_target['message_id'],
-                    'err' => $_e->getMessage(),
-                ]);
-            }
-        }
-    }
-    update("Payment_report", "at_updated", date('Y/m/d H:i:s'), "id_order", $Payment_report['id_order']);
-    update("user", "Processing_value_one", "none", "id", $Balance_id['id']);
-    update("user", "Processing_value_tow", "none", "id", $Balance_id['id']);
-    update("user", "Processing_value_four", "none", "id", $Balance_id['id']);
 } elseif (preg_match('/reject_pay_(\w+)/', $datain, $datagetr) && ($adminrulecheck['rule'] == "administrator" || $adminrulecheck['rule'] == "Seller")) {
     $id_order = $datagetr[1];
     $Payment_report = select("Payment_report", "*", "id_order", $id_order, "select");
@@ -5252,7 +5145,7 @@ $caption";
     $_reject_cancel_text = "🔁 رد رسید لغو شد. رسید دوباره در انتظار بررسی است.
 
 🛒 کد پیگیری پرداخت: {$id_order}
-💰 مبلغ پرداخت : {$Payment_report['price']}
+💰 مبلغ پرداخت : " . rxFormatToman($Payment_report['price']) . "
 👤 ایدی عددی کاربر: {$Payment_report['id_user']}";
     Editmessagetext($_receipt_chat_id, $message_id, $_reject_cancel_text, $_reject_cancel_kb);
 } elseif ($user['step'] == "reject-dec") {
@@ -5278,7 +5171,7 @@ $caption";
 <blockquote>💸 روش پرداخت : {$Payment_report['Payment_Method']}</blockquote>
 <blockquote>👤آیدی عددی  ادمین رد کننده : $from_id</blockquote>
 <blockquote>نام کاربری ادمین رد کننده : @$username</blockquote>
-<blockquote>💰 مبلغ پرداخت : {$Payment_report['price']}</blockquote>
+<blockquote>💰 مبلغ پرداخت : " . rxFormatToman($Payment_report['price']) . "</blockquote>
 <blockquote>دلیل رد کردن : $text</blockquote>
 <blockquote>👤 ایدی عددی کاربر: {$Payment_report['id_user']}</blockquote>";
     if ($_reject_chat_id !== '' && $_reject_message_id !== '') {
@@ -5593,7 +5486,7 @@ $caption";
         nm_adminInstantReply($from_id, $textbotlang['users']['sell']['error-product'], null, 'HTML');
         return;
     }
-    $stmt = $pdo->prepare("DELETE FROM product WHERE name_product =:name_product AND (Location= :Location or Location= '/all')");
+    $stmt = $pdo->prepare("DELETE FROM product WHERE name_product =:name_product AND (FIND_IN_SET(:Location, Location) > 0 or Location= '/all')");
     $stmt->bindParam(':name_product', $text, PDO::PARAM_STR);
     $stmt->bindParam(':Location', $user['Processing_value'], PDO::PARAM_STR);
     $stmt->execute();
@@ -5627,7 +5520,7 @@ $caption";
     $escapedText = mysqli_real_escape_string($connect, $user['Processing_value_one']);
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
     $_loc = $panel['name_panel'];
-    $_stmt = $connect->prepare("SELECT * FROM product WHERE (Location = ? OR Location = '/all') AND agent = ?");
+    $_stmt = $connect->prepare("SELECT * FROM product WHERE (FIND_IN_SET(?, Location) > 0 OR Location = '/all') AND agent = ?");
     $_stmt->bind_param("ss", $_loc, $typeagent);
     $_stmt->execute();
     $getdataproduct = $_stmt->get_result();
@@ -5654,7 +5547,7 @@ $caption";
     update("user", "Processing_value", $id_product, "id", $from_id);
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
     $_loc2 = $panel['name_panel']; $_pv2 = $user['Processing_value_tow'];
-    $_stmt = $connect->prepare("SELECT * FROM product WHERE id = ? AND agent = ? AND (Location = ? OR Location = '/all') LIMIT 1");
+    $_stmt = $connect->prepare("SELECT * FROM product WHERE id = ? AND agent = ? AND (FIND_IN_SET(?, Location) > 0 OR Location = '/all') LIMIT 1");
     $_stmt->bind_param("sss", $id_product, $_pv2, $_loc2);
     $_stmt->execute();
     $info_product = $_stmt->get_result()->fetch_assoc();
@@ -5663,7 +5556,7 @@ $caption";
     $infoproduct = "
 📌 اطلاعات محصول در حال ویرایش:
 نام محصول :  {$info_product['name_product']}
-قیمت محصول : {$info_product['price_product']}
+قیمت محصول : " . rxFormatToman($info_product['price_product']) . "
 حجم محصول : {$info_product['Volume_constraint']}
 موقعیت محصول : {$info_product['Location']}
 زمان محصول : {$info_product['Service_time']}
@@ -5685,7 +5578,7 @@ $caption";
         return;
     }
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET price_product = :price_product WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET price_product = :price_product WHERE id = :name_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':price_product', $text);
     $stmt->bindParam(':name_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5699,7 +5592,7 @@ $caption";
 } elseif ($user['step'] == "change_note") {
     if (!isset($update['message']) && empty($text)) { return; }
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET note = :notes WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET note = :notes WHERE id = :name_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':notes', $text);
     $stmt->bindParam(':name_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5718,7 +5611,7 @@ $caption";
         return;
     }
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET category = :categroy WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET category = :categroy WHERE id = :name_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':categroy', $text);
     $stmt->bindParam(':name_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5740,7 +5633,7 @@ $caption";
         return;
     }
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET name_product = :name_products WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET name_product = :name_products WHERE id = :name_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':name_products', $text);
     $stmt->bindParam(':name_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5761,7 +5654,7 @@ $caption";
     }
     $text = $grp;
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET agent = :agents WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET agent = :agents WHERE id = :name_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':agents', $text);
     $stmt->bindParam(':name_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5775,7 +5668,7 @@ $caption";
 } elseif ($user['step'] == "change_reset_data") {
     if (!isset($update['message']) && empty($text)) { return; }
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET data_limit_reset = :data_limit_reset WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET data_limit_reset = :data_limit_reset WHERE id = :name_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':data_limit_reset', $text);
     $stmt->bindParam(':name_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5796,7 +5689,7 @@ $caption";
     $targetLocation = is_array($panelResolved) && !empty($panelResolved['name_panel']) ? $panelResolved['name_panel'] : $text;
     $product = select("product", "*", "name_product", $user['Processing_value']);
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET Location = :Location2 WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET Location = :Location2 WHERE id = :name_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':Location2', $targetLocation);
     $stmt->bindParam(':name_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5820,7 +5713,7 @@ $caption";
     }
     $product = select("product", "*", "id", $user['Processing_value']);
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one']);
-    $stmt = $pdo->prepare("UPDATE product SET Volume_constraint = :Volume_constraint WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET Volume_constraint = :Volume_constraint WHERE id = :name_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':Volume_constraint', $text);
     $stmt->bindParam(':name_product', $product['id']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5838,7 +5731,7 @@ $caption";
         return;
     }
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET Service_time = :Service_time WHERE id = :id_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET Service_time = :Service_time WHERE id = :id_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':Service_time', $text);
     $stmt->bindParam(':id_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
@@ -5937,7 +5830,7 @@ $caption";
                 ],
             ]
         ]);
-        $textgift = "🎁 کاربر  عزیز مبلغ {$userdata['price']} تومان از طرف مدیریت به عنوان هدیه به کیف پول شما واریز گردید.";
+        $textgift = "🎁 کاربر  عزیز مبلغ " . rxFormatToman($userdata['price']) . " تومان از طرف مدیریت به عنوان هدیه به کیف پول شما واریز گردید.";
         $message_id = sendmessage($from_id, "✅ عملیات ارسال پیام آغاز گردید پس از پایان اطلاع رسانی خواهد شد.", $cancelmessage, "html");
         $data = json_encode(array(
             "id_admin" => $from_id,
@@ -5998,7 +5891,7 @@ $caption";
             'parse_mode' => "HTML"
         ]);
     }
-} elseif ($datain == "searchuser" || $datain == "support_search") {
+} elseif ($datain == "searchuser" || $datain == "support_search" || $text == "👁‍🗨 جستجو کاربر") {
     nm_adminInstantReply($from_id, $textbotlang['Admin']['ManageUser']['GetIdUserunblock'], $backadmin, 'HTML');
     step('show_info', $from_id);
 } elseif ($user['step'] == "show_info" || preg_match('/manageuser_(\w+)/', $datain, $dataget) || preg_match('/updateinfouser_(\w+)/', $datain, $dataget) || strpos($text, "/user ") !== false || strpos($text, "/id ") !== false) {
@@ -6160,6 +6053,11 @@ $caption";
     } else {
         $text_expie_agent = "";
     }
+    $rxFmtUserBalance = rxFormatToman($user['Balance']);
+    $rxFmtBalanceAllSum = rxFormatToman($balanceall['SUM(price)'] ?? 0);
+    $rxFmtSubbuyuserSum = rxFormatToman($subbuyuser['SUM(price_product)'] ?? 0);
+    $rxFmtSuminvoicehours = rxFormatToman($suminvoicehours);
+    $rxFmtSuminvoicemonth = rxFormatToman($suminvoicemonth);
     $textinfouser = "👀 اطلاعات کاربر:
 
 🔗 اطلاعات کاربری کاربر
@@ -6184,15 +6082,15 @@ $text_expie_agent
 
 💎 گزارشات مالی
 
-🔰 موجودی کاربر : {$user['Balance']}
+🔰 موجودی کاربر : {$rxFmtUserBalance}
 🔰 تعداد خرید کل کاربر : {$dayListSell['COUNT(*)']}
-🔰️ مبلغ کل پرداختی  :  {$balanceall['SUM(price)']}
-🔰 جمع کل خرید : {$subbuyuser['SUM(price_product)']}
+🔰️ مبلغ کل پرداختی  :  {$rxFmtBalanceAllSum}
+🔰 جمع کل خرید : {$rxFmtSubbuyuserSum}
 🔰 درصد تخفیف کاربر : {$user['pricediscount']}
 🔰 تعداد فروش یک ساعت گذشته : $listhours عدد
-🔰 مجموع فروش یک ساعت گذشته : $suminvoicehours تومان
+🔰 مجموع فروش یک ساعت گذشته : {$rxFmtSuminvoicehours} تومان
 🔰 تعداد فروش یک ماه گذشته : $listmonth عدد
-🔰 مجموع فروش یک ماه گذشته : $suminvoicemonth تومان
+🔰 مجموع فروش یک ماه گذشته : {$rxFmtSuminvoicemonth} تومان
 
 ";
     if (is_string($datain) && isset($datain[0]) && $datain[0] == "u") {

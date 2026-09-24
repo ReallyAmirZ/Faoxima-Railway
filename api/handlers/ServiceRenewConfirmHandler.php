@@ -301,7 +301,7 @@ final class ServiceRenewConfirmHandler extends BaseHandler
                     'product_name' => $product['name_product'],
                     'volume' => (int)$product['Volume_constraint'],
                     'service_time' => (int)$product['Service_time'],
-                    'price' => $finalPrice,
+                    'price' => rxFormatToman($finalPrice),
                     'panel_name' => $panel['name_panel'],
                 ]),
                 [
@@ -480,7 +480,7 @@ final class ServiceRenewConfirmHandler extends BaseHandler
                 'product_name' => $product['name_product'],
                 'volume' => (int)$product['Volume_constraint'],
                 'service_time' => (int)$product['Service_time'],
-                'price' => $finalPrice,
+                'price' => rxFormatToman($finalPrice),
                 'panel_name' => $panel['name_panel'],
             ]),
             [
@@ -611,13 +611,13 @@ final class ServiceRenewConfirmHandler extends BaseHandler
             ]],
         ]);
         try {
-            telegram('sendmessage', [
+            rx_sendTopicReport([
                 'chat_id'           => $channel,
                 'message_thread_id' => $topic,
                 'text'              => $text,
                 'parse_mode'        => 'HTML',
                 'reply_markup'      => $reply,
-            ]);
+            ], ['flow' => 'miniapp_renew', 'user_id' => (string)($this->user['id'] ?? '')]);
         } catch (Throwable $e) {
             FaoximaLogger::warn('renew success report failed', ['err' => $e->getMessage()]);
         }

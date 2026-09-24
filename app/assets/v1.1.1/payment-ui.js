@@ -10,8 +10,9 @@ export function iconForMethod(m) {
     if (id === 'tonpay')               return 'tronado';
     if (id === 'cubepay')              return 'tronado';
     if (id === 'blupal')               return 'tronado';
+    if (id === 'variza')               return 'tronado';
+    if (id === 'abangateway')          return 'tronado';
     if (id === 'atlaspay')             return 'tronado';
-    if (id === 'tetrapay')             return 'tronado';
     if (id.startsWith('iranpay'))      return 'flower';
     if (id === 'zarinpal')             return 'coin';
     if (id === 'plisio')               return 'exchange';
@@ -33,8 +34,9 @@ export function methodLabel(m) {
     if (id === 'tonpay')                    return 'تون‌پی';
     if (id === 'cubepay')                   return 'کیوب‌پی';
     if (id === 'blupal')                    return 'بلوپال';
+    if (id === 'variza')                    return 'واریزا';
+    if (id === 'abangateway')               return 'آبان گیت وی';
     if (id === 'atlaspay')                  return 'اطلس‌پی';
-    if (id === 'tetrapay')                  return 'تتراپی';
     if (id === 'zarinpal')                  return 'زرین‌پال';
     return m || 'پرداخت';
 }
@@ -406,7 +408,7 @@ function isAutoConfirmGateway(methodId) {
     return (
         id === 'plisio' || id === 'nowpayment' || id === 'digitaltron' ||
         id.startsWith('iranpay') || id === 'tonpay' || id === 'cubepay' ||
-        id === 'zarinpal' || id === 'blupal' || id === 'atlaspay' || id === 'tetrapay'
+        id === 'zarinpal' || id === 'blupal' || id === 'variza' || id === 'abangateway' || id === 'atlaspay'
     );
 }
 
@@ -418,8 +420,9 @@ function isCryptoMethod(methodId) {
 function gatewayTimeoutSec(methodId) {
     const id = String(methodId || '').toLowerCase();
     if (id === 'cubepay') return 3600;
+    if (id === 'variza') return 3600;
     if (id === 'atlaspay') return 1200;
-    if (id === 'tetrapay') return 600;
+    if (id === 'tonpay') return 86400;
     return 1800;
 }
 
@@ -538,6 +541,7 @@ export function startUrlGatewayFlow(rootView, methodId, obj, opts = {}) {
             gatewayUrl: url,
             isCrypto: isCryptoMethod(methodId),
             mode: opts.purchaseUsername ? 'direct_buy' : 'recharge',
+            method: methodId,
             timeoutSec: gatewayTimeoutSec(methodId),
             pollEverySec: 5,
             onSuccess: (statusObj) => renderGatewaySuccess(watchHost, statusObj, opts),

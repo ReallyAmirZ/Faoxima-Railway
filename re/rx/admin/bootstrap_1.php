@@ -61,29 +61,6 @@ function ensureGuardPanelColumnsReady(PDO $pdo)
     ];
 }
 
-function guardFormatServiceList(array $services)
-{
-    if (empty($services)) {
-        return "• لیست سرویس خالی است.";
-    }
-    $lines = [];
-    foreach ($services as $service) {
-        $serviceData = is_array($service) ? $service : [];
-        $id = isset($serviceData['id']) ? intval($serviceData['id']) : 'نامشخص';
-        $title = guardServiceLabel($serviceData);
-        $usageRate = null;
-        foreach (['usage_rate', 'usageRate'] as $rateKey) {
-            if (isset($serviceData[$rateKey]) && is_numeric($serviceData[$rateKey])) {
-                $usageRate = $serviceData[$rateKey];
-                break;
-            }
-        }
-        $rateLabel = $usageRate !== null ? " [{$usageRate}x]" : '';
-        $lines[] = "• id={$id} | {$title}{$rateLabel}";
-    }
-    return implode("\n", $lines);
-}
-
 function guardExtractUsageRateValue(array $service)
 {
     foreach (['usage_rate', 'usageRate'] as $rateKey) {
@@ -104,14 +81,6 @@ function guardFormatUsageRateLabel($rate)
         $formatted .= '.0';
     }
     return $formatted;
-}
-
-function guardBuildServiceButtonLabel(array $service, $isSelected)
-{
-    $label = guardServiceLabel($service);
-    $rateLabel = guardFormatUsageRateLabel(guardExtractUsageRateValue($service));
-    $statusIcon = $isSelected ? '✅' : '❌';
-    return "[{$rateLabel}x] {$label} {$statusIcon}";
 }
 
 function guardBuildServiceSummaryLabel(array $service)
@@ -218,7 +187,6 @@ function buildPaymentGatewayKeyboard(array $textbotlang)
     $cubepay_status_raw = getPaySettingValue('statuscubepay', 'offcubepay');
     $blupal_status_raw = getPaySettingValue('statusblupal', 'offblupal');
     $atlaspay_status_raw = getPaySettingValue('statusatlaspay', 'offatlaspay');
-    $tetrapay_status_raw = getPaySettingValue('statustetrapay', 'offtetrapay');
     $zarinpal = getPaySettingValue('zarinpalstatus', 'offzarinpal');
     $affilnecurrency = getPaySettingValue('digistatus', 'offdigi');
     $paymentsstartelegram = getPaySettingValue('statusstar', '0');
@@ -232,8 +200,11 @@ function buildPaymentGatewayKeyboard(array $textbotlang)
     $tonpaystatus = $tonpay_status_raw === 'ontonpay' ? $statusOn : $statusOff;
     $cubepaystatus = $cubepay_status_raw === 'oncubepay' ? $statusOn : $statusOff;
     $blupalstatus = $blupal_status_raw === 'onblupal' ? $statusOn : $statusOff;
+    $variza_status_raw = getPaySettingValue('statusvariza', 'offvariza');
+    $varizastatus = $variza_status_raw === 'onvariza' ? $statusOn : $statusOff;
+    $abangateway_status_raw = getPaySettingValue('statusabangateway', 'offabangateway');
+    $abangatewaystatus = $abangateway_status_raw === 'onabangateway' ? $statusOn : $statusOff;
     $atlaspaystatus = $atlaspay_status_raw === 'onatlaspay' ? $statusOn : $statusOff;
-    $tetrapaystatus = $tetrapay_status_raw === 'ontetrapay' ? $statusOn : $statusOff;
     $zarinpalstatus = $zarinpal === 'onzarinpal' ? $statusOn : $statusOff;
     $affilnecurrencystatus = $affilnecurrency === 'ondigi' ? $statusOn : $statusOff;
     $paymentstar = (string)$paymentsstartelegram === '1' ? $statusOn : $statusOff;
@@ -281,14 +252,19 @@ function buildPaymentGatewayKeyboard(array $textbotlang)
             ['text' => '💙 بلوپال', 'callback_data' => 'blupal'],
         ],
         [
+            ['text' => '⚙️ تنظیمات', 'callback_data' => 'varizasetting'],
+            ['text' => $varizastatus, 'callback_data' => "editpayment-variza-$variza_status_raw"],
+            ['text' => '💳 واریزا', 'callback_data' => 'variza'],
+        ],
+        [
+            ['text' => '⚙️ تنظیمات', 'callback_data' => 'abangatewaysetting'],
+            ['text' => $abangatewaystatus, 'callback_data' => "editpayment-abangateway-$abangateway_status_raw"],
+            ['text' => '💳 آبان گیت وی', 'callback_data' => 'abangateway'],
+        ],
+        [
             ['text' => '⚙️ تنظیمات', 'callback_data' => 'atlaspaysetting'],
             ['text' => $atlaspaystatus, 'callback_data' => "editpayment-atlaspay-$atlaspay_status_raw"],
             ['text' => '🌐 اطلس‌پی', 'callback_data' => 'atlaspay'],
-        ],
-        [
-            ['text' => '⚙️ تنظیمات', 'callback_data' => 'tetrapaysetting'],
-            ['text' => $tetrapaystatus, 'callback_data' => "editpayment-tetrapay-$tetrapay_status_raw"],
-            ['text' => '🔷 تتراپی', 'callback_data' => 'tetrapay'],
         ],
         [
             ['text' => '⚙️ تنظیمات', 'callback_data' => 'zarinpalsetting'],
@@ -717,6 +693,23 @@ if (!function_exists('nm_getBroadcastStatus')) {
                 $remaining = count($decoded);
             }
         }
+        $bcToken = substr(md5(
+            ($info['id_admin'] ?? '') . '|' . ($info['id_message'] ?? '') . '|' .
+            ($info['type'] ?? '') . '|' . ($info['message'] ?? '')
+        ), 0, 12);
+        $inflight = 0;
+        foreach (glob($usersFileTxt . '.w*.' . $bcToken . '.inflight') ?: [] as $inf) {
+            $fh = @fopen($inf, 'r');
+            if ($fh) {
+                while (!feof($fh)) {
+                    $chunk = fread($fh, 65536);
+                    if ($chunk === false) break;
+                    $inflight += substr_count($chunk, "\n");
+                }
+                fclose($fh);
+            }
+        }
+        $remaining += $inflight;
         $stats = isset($info['stats']) && is_array($info['stats']) ? $info['stats'] : [];
         $stats += [
             'total'          => 0,
@@ -745,6 +738,7 @@ if (!function_exists('nm_getBroadcastStatus')) {
             'total'          => $total,
             'sent'           => $totalSent,
             'remaining'      => $remaining,
+            'inflight'       => $inflight,
             'success'        => (int) $stats['success'],
             'blocked'        => (int) $stats['blocked'],
             'deleted'        => (int) $stats['deleted'],
@@ -752,6 +746,9 @@ if (!function_exists('nm_getBroadcastStatus')) {
             'chat_not_found' => (int) $stats['chat_not_found'],
             'started_at'     => (int) $stats['started_at'],
             'finished'       => ($remaining === 0),
+            'status'         => (string) ($info['status'] ?? 'queued'),
+            'token'          => $bcToken,
+            'info'           => $info,
         ];
     }
 }
@@ -772,12 +769,19 @@ if (!function_exists('nm_buildBroadcastStatusText')) {
         $cells  = 10;
         $filled = $total > 0 ? (int) floor(($sent / $total) * $cells) : 0;
         $bar    = str_repeat('█', $filled) . str_repeat('░', max(0, $cells - $filled));
-        $t  = "⏳ <b>یک عملیات ارسال پیام در حال انجام است</b>\n";
+        $isPaused = function_exists('rx_broadcast_is_paused') && rx_broadcast_is_paused($status['status'] ?? '');
+        $t  = $isPaused
+            ? "⏸️ <b>عملیات ارسال پیام موقتاً متوقف شده است</b>\n"
+            : "⏳ <b>یک عملیات ارسال پیام در حال انجام است</b>\n";
         $t .= "—————————————————\n";
         $t .= "⚙️ نوع عملیات : <b>{$typeName}</b>\n\n";
         $t .= "👥 تعداد کل کاربران : <b>" . number_format($total)     . "</b>\n";
         $t .= "🚀 ارسال‌شده : <b>"        . number_format($sent)      . "</b>\n";
-        $t .= "📊 باقی‌مانده در صف : <b>" . number_format($remaining) . "</b>\n\n";
+        $t .= "📊 باقی‌مانده در صف : <b>" . number_format($remaining) . "</b>\n";
+        if (!empty($status['inflight'])) {
+            $t .= "🔄 در حال پردازش : <b>" . number_format((int) $status['inflight']) . "</b>\n";
+        }
+        $t .= "\n";
         $t .= "📈 پیشرفت : <b>{$progress}%</b>\n<code>{$bar}</code>\n";
         $details = [];
         if ($status['success']        > 0) $details[] = '✅ موفق: '   . number_format($status['success']);
@@ -792,20 +796,24 @@ if (!function_exists('nm_buildBroadcastStatusText')) {
             $elapsed = max(0, time() - (int) $status['started_at']);
             $t .= "⏱ زمان سپری‌شده : <code>" . gmdate('H:i:s', $elapsed) . "</code>\n";
         }
+        if ($isPaused && is_array($status['info'] ?? null)) {
+            $t .= rx_broadcast_pause_text($status['info']);
+        }
         $t .= "\n🕒 آخرین بروزرسانی : <code>" . date('H:i:s') . "</code>";
         $t .= "\n💡 برای دیدن آخرین آمار روی «🔄 بروزرسانی» بزنید.";
         return $t;
     }
 }
 if (!function_exists('nm_buildBroadcastStatusKeyboard')) {
-    function nm_buildBroadcastStatusKeyboard() {
-        return json_encode([
-            'inline_keyboard' => [
-                [['text' => "🔄 بروزرسانی",       'callback_data' => 'broadcast_status_refresh']],
-                [['text' => "❌ لغو عملیات",       'callback_data' => 'cancel_sendmessage']],
-                [['text' => "بازگشت به منوی اصلی", 'callback_data' => 'backlistuser']],
-            ]
-        ]);
+    function nm_buildBroadcastStatusKeyboard($status = null) {
+        $rows = [];
+        if (is_array($status) && !empty($status['token']) && function_exists('rx_broadcast_is_paused') && rx_broadcast_is_paused($status['status'] ?? '')) {
+            $rows[] = [rx_broadcast_resume_button((string) $status['token'])];
+        }
+        $rows[] = [['text' => "🔄 بروزرسانی",       'callback_data' => 'broadcast_status_refresh']];
+        $rows[] = [['text' => "❌ لغو عملیات",       'callback_data' => 'cancel_sendmessage']];
+        $rows[] = [['text' => "بازگشت به منوی اصلی", 'callback_data' => 'backlistuser']];
+        return json_encode(['inline_keyboard' => $rows]);
     }
 }
 
@@ -831,6 +839,9 @@ if (!empty($datain) && in_array($from_id, $admin_ids ?? [])) {
         'admin_channelhub'   => "📢 کانال و اطلاع‌رسانی",
         'admin_usershub'     => "👥 مدیریت کاربران",
         'adm_hub_main'       => $textbotlang['Admin']['backadmin'],
+        'panelshub_backmenu'  => $textbotlang['Admin']['backmenu'],
+        'channelhub_backmenu' => $textbotlang['Admin']['backmenu'],
+        'usershub_backmenu'   => $textbotlang['Admin']['backmenu'],
 
         'seller_status'     => $textbotlang['Admin']['Status']['btn'],
         'seller_users'      => "👤 مدیریت کاربر",
@@ -930,6 +941,26 @@ if (!empty($datain) && in_array($from_id, $admin_ids ?? [])) {
         'blupal_back'     => $textbotlang['Admin']['backadmin'],
         'blupal_backmenu' => $textbotlang['Admin']['backmenu'],
 
+        'variza_name'         => "🏷️ نام نمایشی درگاه واریزا",
+        'variza_apikey'       => "🔑 ثبت توکن API واریزا",
+        'variza_webhooksecret' => "🔐 ثبت کلید وب‌هوک واریزا",
+        'variza_cashback'     => "💰 کش بک واریزا",
+        'variza_min'          => "⬇️ کف واریزا",
+        'variza_max'          => "⬆️ سقف واریزا",
+        'variza_edu'          => "📚 آموزش واریزا",
+        'variza_back'         => $textbotlang['Admin']['backadmin'],
+        'variza_backmenu'     => $textbotlang['Admin']['backmenu'],
+
+        'abangateway_name'     => "🏷️ نام نمایشی درگاه آبان گیت وی",
+        'abangateway_url'      => "🔗 ثبت آدرس درگاه آبان گیت وی",
+        'abangateway_apikey'   => "🔑 ثبت کلید اتصال آبان گیت وی",
+        'abangateway_cashback' => "💰 کش بک آبان گیت وی",
+        'abangateway_min'      => "⬇️ کف آبان گیت وی",
+        'abangateway_max'      => "⬆️ سقف آبان گیت وی",
+        'abangateway_edu'      => "📚 آموزش آبان گیت وی",
+        'abangateway_back'     => $textbotlang['Admin']['backadmin'],
+        'abangateway_backmenu' => $textbotlang['Admin']['backmenu'],
+
         'atlaspay_name'     => "🏷️ نام نمایشی درگاه اطلس‌پی",
         'atlaspay_apikey'   => "🔑 ثبت API Key اطلس‌پی",
         'atlaspay_account'  => "📊 موجودی و اطلاعات حساب",
@@ -939,16 +970,6 @@ if (!empty($datain) && in_array($from_id, $admin_ids ?? [])) {
         'atlaspay_edu'      => "📚 آموزش اطلس‌پی",
         'atlaspay_back'     => $textbotlang['Admin']['backadmin'],
         'atlaspay_backmenu' => $textbotlang['Admin']['backmenu'],
-
-        'tetrapay_name'     => "🏷️ نام نمایشی درگاه تتراپی",
-        'tetrapay_apikey'   => "🔑 ثبت API Key تتراپی",
-        'tetrapay_apiurl'   => "🌍 ثبت آدرس سرور API تتراپی",
-        'tetrapay_cashback' => "💰 کش بک تتراپی",
-        'tetrapay_min'      => "⬇️ کف تتراپی",
-        'tetrapay_max'      => "⬆️ سقف تتراپی",
-        'tetrapay_edu'      => "📚 آموزش تتراپی",
-        'tetrapay_back'     => $textbotlang['Admin']['backadmin'],
-        'tetrapay_backmenu' => $textbotlang['Admin']['backmenu'],
 
         'zpal_name'     => "🏷️ نام نمایشی درگاه زرین پال",
         'zpal_merchant' => "مرچنت زرین پال",
@@ -1029,8 +1050,9 @@ if (!empty($datain) && in_array($from_id, $admin_ids ?? [])) {
         'tonpay_backmenu' => 'finance',
         'cubepay_backmenu' => 'finance',
         'blupal_backmenu' => 'finance',
+        'variza_backmenu' => 'finance',
+        'abangateway_backmenu' => 'finance',
         'atlaspay_backmenu' => 'finance',
-        'tetrapay_backmenu' => 'finance',
         'zpal_backmenu'   => 'finance',
         'zpey_backmenu'   => 'finance',
         'aqaye_backmenu'  => 'finance',
@@ -1042,6 +1064,9 @@ if (!empty($datain) && in_array($from_id, $admin_ids ?? [])) {
         'ch_backmenu'     => 'channelhub',
         'ch_back'         => 'home',
         'feat_backmenu'   => 'settings',
+        'panelshub_backmenu'  => 'home',
+        'channelhub_backmenu' => 'home',
+        'usershub_backmenu'   => 'home',
         'adm_backmenu'    => null,
     ];
     if (array_key_exists((string) $datain, $_rx_back_origin_map)) {

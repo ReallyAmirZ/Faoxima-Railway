@@ -21,11 +21,11 @@ final class PendingPaymentsHandler extends BaseHandler
         try {
             $rows = FaoximaDb::fetchAll(
                 "SELECT id, id_order, time, price, payment_Status, Payment_Method,
-                        dec_not_confirmed, crypto_currency, crypto_tx_hash, tonpay_invoice_id, cubepay_payment_link, blupal_invoice_id, atlaspay_order_id, tetrapay_token
+                        dec_not_confirmed, crypto_currency, crypto_tx_hash, tonpay_invoice_id, cubepay_payment_link, blupal_invoice_id, atlaspay_order_id
                    FROM Payment_report
                   WHERE id_user = :u
                     AND payment_Status IN ('Unpaid','waiting','AwaitingHash','pending','expire')
-                    AND Payment_Method IN ('plisio','nowpayment','digitaltron','arze digital offline','cart to cart','carttocart_pv','iranpay2','tonpay','cubepay','blupal','atlaspay','tetrapay')
+                     AND Payment_Method IN ('plisio','nowpayment','digitaltron','arze digital offline','cart to cart','carttocart_pv','iranpay2','tonpay','cubepay','blupal','variza','abangateway','atlaspay')
                     AND source = 'miniapp'
                   ORDER BY id DESC
                   LIMIT 8",
@@ -70,10 +70,12 @@ final class PendingPaymentsHandler extends BaseHandler
                     return !empty($labels['cubepay']) ? $labels['cubepay'] : 'کیوب‌پی';
                 case 'blupal':
                     return !empty($labels['blupal']) ? $labels['blupal'] : 'بلوپال';
+                case 'variza':
+                    return !empty($labels['variza']) ? $labels['variza'] : 'واریزا';
+                case 'abangateway':
+                    return !empty($labels['abangateway']) ? $labels['abangateway'] : 'آبان گیت وی';
                 case 'atlaspay':
                     return !empty($labels['atlaspay']) ? $labels['atlaspay'] : 'اطلس‌پی';
-                case 'tetrapay':
-                    return !empty($labels['tetrapay']) ? $labels['tetrapay'] : 'تتراپی';
                 case 'zarinpal':
                     return !empty($labels['zarinpal']) ? $labels['zarinpal'] : 'زرین‌پال';
                 case 'plisio':
@@ -116,9 +118,7 @@ final class PendingPaymentsHandler extends BaseHandler
                 if (trim((string)($r['blupal_invoice_id'] ?? '')) === '') continue;
             } elseif ($methodLc === 'atlaspay') {
                 if (trim((string)($r['atlaspay_order_id'] ?? '')) === '') continue;
-            } elseif ($methodLc === 'tetrapay') {
-                if (trim((string)($r['tetrapay_token'] ?? '')) === '') continue;
-            } elseif (in_array($methodLc, ['plisio', 'nowpayment', 'digitaltron', 'iranpay2'], true)) {
+            } elseif (in_array($methodLc, ['plisio', 'nowpayment', 'digitaltron', 'iranpay2', 'variza', 'abangateway'], true)) {
                 if ($decVal === '') continue;
             }
 
@@ -156,11 +156,14 @@ final class PendingPaymentsHandler extends BaseHandler
         if (strtolower($method) === 'cubepay') {
             return 3600;
         }
+        if (strtolower($method) === 'variza') {
+            return 3600;
+        }
         if (strtolower($method) === 'atlaspay') {
             return 1200;
         }
-        if (strtolower($method) === 'tetrapay') {
-            return 600;
+        if (strtolower($method) === 'tonpay') {
+            return 86400;
         }
         return 1800;
     }

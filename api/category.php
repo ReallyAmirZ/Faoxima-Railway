@@ -89,7 +89,7 @@ function logApiRequest($headers, $data, $action)
             "INSERT IGNORE INTO logs_api (header, data, time, ip, actions) VALUES (?, ?, ?, ?, ?)"
         );
         $stmt->execute([
-            json_encode($headers),
+            json_encode(FaoximaApiCredential::redactHeaders($headers)),
             json_encode($data),
             date('Y/m/d H:i:s'),
             $_SERVER['REMOTE_ADDR'] ?? 'unknown',
@@ -243,6 +243,12 @@ switch ($data['actions'] ?? '') {
             sendJsonResponse(false, "category not found", [], 200);
         }
 
+        if (isset($data['remark']) && (string) $data['remark'] !== (string) $category['remark']) {
+            if (!rxCategoryRenameCascade($pdo, (string) $category['remark'], (string) $data['remark'])) {
+                sendJsonResponse(false, "An error occurred while adding category");
+            }
+            sendJsonResponse(true, "category updated successfully", [], 200);
+        }
         try {
             $categoryData = [
                 'remark' => isset($data['remark']) ? $data['remark'] : $category['remark'],
@@ -282,9 +288,9 @@ switch ($data['actions'] ?? '') {
             sendJsonResponse(false, "category not found", [], 200);
         }
         try {
-            $stmt = $pdo->prepare("DELETE FROM category  WHERE id = :id");
-            $stmt->bindValue(":id", $data['id'], PDO::PARAM_INT);
-            $stmt->execute();
+            if (!rxCategoryDeleteGuarded($pdo, (string) $category['remark'], (int) $data['id'])) {
+                sendJsonResponse(false, "An error occurred while delete prodcut");
+            }
 
             sendJsonResponse(true, "category delete successfully", [], 200);
 

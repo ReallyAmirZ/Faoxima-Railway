@@ -22,6 +22,7 @@ if (isset($update["inline_query"])) {
             $OrderUser['Service_time'] = $OrderUser['Service_time'] . "روزه";
         }
         $OrderUser['Volume'] = formatInvoiceVolume($OrderUser);
+        $rxFmtOrderUserPrice = rxFormatToman($OrderUser['price_product']);
         $results[] = [
             "type" => "article",
             "id" => uniqid(),
@@ -36,7 +37,7 @@ if (isset($update["inline_query"])) {
 👤 نام کاربری اشتراک :  {$OrderUser['username']}
 📍 موقعیت سرویس :  {$OrderUser['Service_location']}
 🛍 نام محصول :  {$OrderUser['name_product']}
-💰 قیمت پرداختی سرویس : {$OrderUser['price_product']} تومان
+💰 قیمت پرداختی سرویس : {$rxFmtOrderUserPrice} تومان
 ⚜️ حجم سرویس خریداری شده : {$OrderUser['Volume']}
 ⏳ زمان سرویس خریداری شده : {$OrderUser['Service_time']}
 📆 تاریخ خرید : $datatime
@@ -1487,11 +1488,12 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, "📌 دسته بندی خود را جهت حذف انتخاب کنید", KeyboardCategoryadmin(), 'HTML');
     step("removecategory", $from_id);
 } elseif ($user['step'] == "removecategory") {
-    nm_adminInstantReply($from_id, "✅ دسته بندی با موفقیت حذف گردید.", $shopkeyboard, 'HTML');
     step("home", $from_id);
-    $stmt = $pdo->prepare("DELETE FROM category WHERE remark = :remark ");
-    $stmt->bindParam(':remark', $text);
-    $stmt->execute();
+    if (!rxCategoryDeleteGuarded($pdo, (string) $text)) {
+        nm_adminInstantReply($from_id, $textbotlang['users']['stateus']['error'], $shopkeyboard, 'HTML');
+        return;
+    }
+    nm_adminInstantReply($from_id, "✅ دسته بندی با موفقیت حذف گردید.", $shopkeyboard, 'HTML');
 } elseif ($text == "مخفی کردن پنل" && $adminrulecheck['rule'] == "administrator") {
     if ($user['Processing_value_one'] != "/all") {
         nm_adminInstantReply($from_id, "📌 این قابلیت فقط زمانی کاربرد دارد که شما لوکیشن محصول را /all تعریف کرده باشید.", null, 'HTML');
@@ -1556,10 +1558,12 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
     step("get_name_new_category", $from_id);
 } elseif ($user['step'] == "get_name_new_category") {
     $userdata = json_decode($user['Processing_value'], true);
-    nm_adminInstantReply($from_id, "✅ نام دسته بندی با موفقیت تغییر کرد.", $keyboard_Category_manage, 'HTML');
     step("home", $from_id);
-    update("category", "remark", $text, "remark", $userdata['category']);
-    update("product", "category", $text, "category", $userdata['category']);
+    if (!rxCategoryRenameCascade($pdo, (string) ($userdata['category'] ?? ''), (string) $text)) {
+        nm_adminInstantReply($from_id, $textbotlang['users']['stateus']['error'], $keyboard_Category_manage, 'HTML');
+        return;
+    }
+    nm_adminInstantReply($from_id, "✅ نام دسته بندی با موفقیت تغییر کرد.", $keyboard_Category_manage, 'HTML');
 } elseif ($datain == "zerobalance") {
     update("user", "pagenumber", "1", "id", $from_id);
     $page = 1;
@@ -1750,7 +1754,7 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
     step("home", $from_id);
 } elseif ($text == "نمایش برای خرید اول") {
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("SELECT * FROM product WHERE id = :name_product  AND agent = :agent AND (Location = :Location OR Location = '/all') LIMIT 1");
+    $stmt = $pdo->prepare("SELECT * FROM product WHERE id = :name_product  AND agent = :agent AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') LIMIT 1");
     $stmt->bindParam(':name_product', $user['Processing_value']);
     $stmt->bindParam(':Location', $panel['name_panel']);
     $stmt->bindParam(':agent', $user['Processing_value_tow']);
@@ -1777,13 +1781,13 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
         $status_now = '0';
     }
     $panel = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
-    $stmt = $pdo->prepare("UPDATE product SET one_buy_status = :one_buy_status WHERE code_product = :code_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+    $stmt = $pdo->prepare("UPDATE product SET one_buy_status = :one_buy_status WHERE code_product = :code_product AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') AND agent = :agent");
     $stmt->bindParam(':one_buy_status', $status_now);
     $stmt->bindParam(':code_product', $code_product);
     $stmt->bindParam(':Location', $panel['name_panel']);
     $stmt->bindParam(':agent', $user['Processing_value_tow']);
     $stmt->execute();
-    $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product  AND agent = :agent AND (Location = :Location OR Location = '/all') LIMIT 1");
+    $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product  AND agent = :agent AND (FIND_IN_SET(:Location, Location) > 0 OR Location = '/all') LIMIT 1");
     $stmt->bindParam(':code_product', $code_product);
     $stmt->bindParam(':Location', $panel['name_panel']);
     $stmt->bindParam(':agent', $user['Processing_value_tow']);

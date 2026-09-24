@@ -10,7 +10,7 @@ if (session_status() === PHP_SESSION_NONE) {
 // Panel version (read from the project root `version` file). Displayed in the
 // sidebar footer on every page. Always shown with a leading "v".
 $__panelVersionRaw = trim((string)@file_get_contents(__DIR__ . '/../version'));
-if ($__panelVersionRaw === '') $__panelVersionRaw = '1.0.5';
+if ($__panelVersionRaw === '') $__panelVersionRaw = '1.1.1';
 $__panelVersion = (stripos($__panelVersionRaw, 'v') === 0) ? $__panelVersionRaw : ('v' . $__panelVersionRaw);
 
 if (isset($_SESSION["user"])) {
@@ -125,6 +125,12 @@ if (isset($pdo) && $pdo instanceof PDO) {
 }
 $__hdr_tickets_unseen = ($__hdr_ticket_latest > $__hdr_ticket_seen) ? 1 : 0;
 $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
+$__hdr_pending_receipts = 0;
+if (isset($pdo) && $pdo instanceof PDO) {
+    try {
+        $__hdr_pending_receipts = (int)$pdo->query("SELECT COUNT(*) FROM Payment_report WHERE Payment_Method = 'cart to cart' AND payment_Status = 'waiting'")->fetchColumn();
+    } catch (\Throwable $e) {}
+}
 ?>
 
 <script>
@@ -137,6 +143,18 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
         var s = html.style;
         var PRESET = { red:'#ef4444', blue:'#3b82f6', purple:'#a855f7', yellow:'#facc15', orange:'#f97316', green:'#22c55e' };
         function fg(r,g,b){ function lin(v){ v/=255; return v<=0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055,2.4); } var L=0.2126*lin(r)+0.7152*lin(g)+0.0722*lin(b); return L>0.45?'#14121d':'#ffffff'; }
+        function lin(v){ v/=255; return v<=0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055,2.4); }
+        function relLum(r,g,b){ return 0.2126*lin(r)+0.7152*lin(g)+0.0722*lin(b); }
+        function ratioOn(r,g,b,bgL){ var L=relLum(r,g,b); var hi=L>bgL?L:bgL, lo=L>bgL?bgL:L; return (hi+0.05)/(lo+0.05); }
+        function surfaceLum(light){ var v=''; try { v=getComputedStyle(html).getPropertyValue('--surface-1')||''; } catch(e){ v=''; } var sm=/^#?([0-9a-f]{6})$/i.exec(String(v).trim()); if(sm){ var sn=parseInt(sm[1],16); return relLum((sn>>16)&255,(sn>>8)&255,sn&255); } return light?relLum(255,255,255):relLum(21,22,26); }
+        function mixInk(r,g,b,k,light){ return light ? [Math.round(r*(1-k)),Math.round(g*(1-k)),Math.round(b*(1-k))] : [Math.round(r+(255-r)*k),Math.round(g+(255-g)*k),Math.round(b+(255-b)*k)]; }
+        function hexOf(c){ function h(v){ var x=v.toString(16); return x.length<2?'0'+x:x; } return '#'+h(c[0])+h(c[1])+h(c[2]); }
+        function inkFor(r,g,b,light){ var bgL=surfaceLum(light); if(ratioOn(r,g,b,bgL)>=4.5) return hexOf([r,g,b]); var lo=0,hi=1,i,mid,c; for(i=0;i<24;i++){ mid=(lo+hi)/2; c=mixInk(r,g,b,mid,light); if(ratioOn(c[0],c[1],c[2],bgL)>=4.5) hi=mid; else lo=mid; } c=mixInk(r,g,b,hi,light); var gd=0; while(ratioOn(c[0],c[1],c[2],bgL)<4.5 && gd++<255){ hi=Math.min(1,hi+0.004); c=mixInk(r,g,b,hi,light); } return hexOf(c); }
+
+        var t = localStorage.getItem('faoxima_theme');
+        var light = (t === 'light');
+        html.setAttribute('data-theme', light ? 'light' : 'dark');
+
         var hex;
         if (PRESET[color]) { hex = PRESET[color]; html.setAttribute('data-color', color); }
         else {
@@ -144,12 +162,12 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
             if (m) { hex='#'+m[1].toLowerCase(); var n=parseInt(m[1],16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;
                 s.setProperty('--accent',hex); s.setProperty('--accent-soft','rgba('+r+','+g+','+b+',0.15)');
                 s.setProperty('--accent-mid','rgba('+r+','+g+','+b+',0.35)'); s.setProperty('--accent-glow','rgba('+r+','+g+','+b+',0.5)');
+                s.setProperty('--accent-ink', inkFor(r,g,b,light));
+                s.setProperty('--accent-ring', 'rgba('+r+','+g+','+b+','+(light?'0.40':'0.45')+')');
                 html.setAttribute('data-color','custom'); }
             else { hex=PRESET.blue; html.setAttribute('data-color','blue'); }
         }
         var pn=parseInt(hex.slice(1),16); s.setProperty('--accent-fg', fg((pn>>16)&255,(pn>>8)&255,pn&255));
-        var t = localStorage.getItem('faoxima_theme');
-        html.setAttribute('data-theme', (t === 'light' || t === 'dark') ? t : 'dark');
     } catch (e) {  }
 })();
 </script>
@@ -157,13 +175,13 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
 <style>
 .profile-trigger.brand-pill {
     direction: ltr;
-    gap: 9px;
-    padding: 0 16px 0 0;
+    gap: 8px;
+    padding: 0 14px 0 4px;
     background: var(--surface-2);
     border: 1px solid var(--border-soft);
-    border-radius: 999px;
-    box-shadow: 0 1px 3px rgba(20, 20, 30, 0.12), 0 10px 28px -8px rgba(20, 20, 30, 0.35);
-    height: 36px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-1);
+    height: 38px;
 }
 [data-theme="dark"] .profile-trigger.brand-pill,
 :root:not([data-theme="light"]) .profile-trigger.brand-pill {
@@ -175,14 +193,14 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
     border-color: var(--border-mid);
 }
 .profile-trigger.brand-pill .logo {
-    width: 36px; height: 36px;
-    border-radius: 50%;
+    width: 30px; height: 30px;
+    border-radius: var(--radius-md);
     display: grid; place-items: center;
     overflow: hidden;
     flex-shrink: 0;
     background: #fff;
-    margin: -1px;
-    box-shadow: 0 1px 3px rgba(20, 20, 30, 0.18), 0 3px 8px rgba(20, 20, 30, 0.14);
+    margin: 0;
+    box-shadow: var(--shadow-1);
 }
 [data-theme="dark"] .profile-trigger.brand-pill .logo,
 :root:not([data-theme="light"]) .profile-trigger.brand-pill .logo {
@@ -191,7 +209,7 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
 .profile-trigger.brand-pill .logo img {
     width: 100%; height: 100%;
     object-fit: contain; object-position: center;
-    transform: scale(1.35);
+    transform: scale(1.2);
     display: block;
 }
 .profile-trigger.brand-pill .profile-info {
@@ -199,47 +217,47 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
 }
 .version-pill {
     direction: ltr;
-    display: flex; align-items: center; gap: 9px;
+    display: flex; align-items: center; gap: 8px;
     width: 100%;
-    padding: 0 14px 0 0;
-    background: var(--surface-2);
-    border: 1px solid var(--border-soft);
-    border-radius: 999px;
-    box-shadow: 0 1px 3px rgba(20, 20, 30, 0.12), 0 10px 28px -8px rgba(20, 20, 30, 0.35);
-    height: 34px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-1);
+    height: 28px;
 }
 [data-theme="dark"] .version-pill,
 :root:not([data-theme="light"]) .version-pill { box-shadow: none; }
 .version-pill .logo {
-    width: 34px; height: 34px;
-    border-radius: 50%;
+    width: 20px; height: 20px;
+    border-radius: var(--radius-sm);
     display: grid; place-items: center;
     overflow: hidden;
     flex-shrink: 0;
     background: #fff;
-    margin: -1px;
-    box-shadow: 0 1px 3px rgba(20, 20, 30, 0.18), 0 3px 8px rgba(20, 20, 30, 0.14);
+    margin: 0;
+    box-shadow: var(--shadow-1);
 }
 [data-theme="dark"] .version-pill .logo,
 :root:not([data-theme="light"]) .version-pill .logo { box-shadow: none; }
 .version-pill .logo img {
     width: 100%; height: 100%;
     object-fit: contain; object-position: center;
-    transform: scale(1.35);
+    transform: scale(1.2);
     display: block;
 }
 .version-pill__label {
-    font-size: 15px; font-weight: 800; letter-spacing: -0.01em;
-    color: var(--text-main);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    color: var(--text-muted);
 }
 .version-pill__num {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 15px; font-weight: 700;
-    color: var(--text-main);
+    font-size: 11px; font-weight: 600;
+    color: var(--text-dim);
     margin-inline-start: auto;
 }
 .profile-trigger.brand-pill .profile-info b {
-    font-weight: 800; font-size: 15px; letter-spacing: -0.01em;
+    font-weight: 600; font-size: 13px; letter-spacing: -0.01em;
     color: var(--text-main);
 }
 .submenu-wrap { position: relative; }
@@ -294,7 +312,7 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
     .submenu-wrap.open .submenu-panel { transform: translateY(0) scale(1); }
 }
 .hdr-actions { flex: 1 1 auto; display: flex; justify-content: flex-end; }
-.hdr-actions .hdr-search { flex: 0 1 640px; max-width: 640px; margin-inline-end: auto; }
+.hdr-actions .hdr-search { flex: 0 1 520px; max-width: 520px; margin-inline-end: auto; }
 @media (max-width: 900px) {
     .hdr-actions .hdr-search { flex-basis: 360px; max-width: 360px; }
 }
@@ -306,11 +324,11 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
     .profile-info { display: flex; }
     #hdrBellWrap .profile-menu { right: auto; left: 8px; }
 }
-.hdr-search__mobtoggle { display: none; border-radius: 999px; }
+.hdr-search__mobtoggle { display: none; border-radius: var(--radius-md); }
 .hdr-search input {
-    border-radius: 100px;
-    padding: 10px 16px;
-    box-shadow: 0 1px 3px rgba(20, 20, 30, 0.12), 0 10px 28px -8px rgba(20, 20, 30, 0.35);
+    border-radius: var(--radius-md);
+    padding: 0 14px;
+    box-shadow: var(--shadow-1);
 }
 [data-theme="dark"] .hdr-search input,
 :root:not([data-theme="light"]) .hdr-search input {
@@ -459,6 +477,7 @@ $__hdr_notif_total = $__hdr_new_orders + $__hdr_open_tickets;
                     <li><a href="category.php"><span class="menu-symbol"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 5C3 3.89543 3.89543 3 5 3H9C10.1046 3 11 3.89543 11 5V9C11 10.1046 10.1046 11 9 11H5C3.89543 11 3 10.1046 3 9V5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 5C13 3.89543 13.8954 3 15 3H19C20.1046 3 21 3.89543 21 5V9C21 10.1046 20.1046 11 19 11H15C13.8954 11 13 10.1046 13 9V5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 15C3 13.8954 3.89543 13 5 13H9C10.1046 13 11 13.8954 11 15V19C11 20.1046 10.1046 21 9 21H5C3.89543 21 3 20.1046 3 19V15Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 15C13 13.8954 13.8954 13 15 13H19C20.1046 13 21 13.8954 21 15V19C21 20.1046 20.1046 21 19 21H15C13.8954 21 13 20.1046 13 19V15Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>دسته‌بندی‌ها</span></a></li>
                     <li><a href="service.php"><span class="menu-symbol"><svg class="svg-icon" viewBox="0 0 138.518 138.518" aria-hidden="true"><g fill="currentColor" stroke="none"><path d="M20.547,112.328c2.083,0,3.771,1.691,3.771,3.776c0,2.079-1.688,3.765-3.771,3.765c-2.084,0-3.773-1.686-3.773-3.765C16.774,114.02,18.463,112.328,20.547,112.328z"/><path d="M20.547,78.709c2.083,0,3.771,1.69,3.771,3.775c0,2.08-1.688,3.766-3.771,3.766c-2.084,0-3.773-1.686-3.773-3.766C16.774,80.399,18.463,78.709,20.547,78.709z"/><circle cx="20.547" cy="48.862" r="3.771"/><path d="M14.478,126.589c-2.881,0-5.244-2.354-5.244-5.248v-10.484c0-2.895,2.363-5.247,5.244-5.247h48.603c0-0.011,0-0.011,0-0.022c0-4.422,0.792-8.656,2.169-12.618H14.478c-2.881,0-5.244-2.362-5.244-5.253V77.236c0-2.893,2.363-5.246,5.244-5.246h68.345c5.56-3.126,11.962-4.923,18.779-4.923c5.976,0,11.62,1.408,16.668,3.85l-1.686-9.757c1.708-1.866,2.782-4.331,2.782-7.058V43.617c0-0.117-0.057-0.208-0.057-0.32L108.848,5.211C108.53,2.35,105.654,0,102.446,0h-81.53c-3.207,0-6.09,2.35-6.404,5.211L4.049,43.297c0,0.112-0.055,0.203-0.055,0.32v10.484c0,2.722,1.071,5.192,2.78,7.058L4.049,76.914c0,0.115-0.055,0.208-0.055,0.322v10.485c0,2.719,1.071,5.192,2.78,7.059l-2.725,15.754c0,0.114-0.055,0.207-0.055,0.322v10.484c0,5.784,4.706,10.49,10.484,10.49h58.999c-1.521-1.631-2.91-3.371-4.13-5.242H14.478L14.478,126.589z M9.239,43.617c0-2.893,2.365-5.25,5.246-5.25h94.401c2.885,0,5.248,2.358,5.248,5.25v10.484c0,2.893-2.363,5.25-5.248,5.25H14.478c-2.881,0-5.244-2.357-5.244-5.25V43.617H9.239z"/><path d="M101.603,72.679c-18.178,0-32.919,14.73-32.919,32.92c0,18.178,14.741,32.919,32.919,32.919c18.181,0,32.921-14.741,32.921-32.919C134.523,87.42,119.783,72.679,101.603,72.679z M118.064,110.534h-11.531v11.519h-9.871v-11.519H85.133v-9.883h11.529V89.133h9.871v11.519h11.531V110.534z"/></g></svg></span><span>سرویس‌ها</span></a></li>
                     <li><a href="payment.php"><span class="menu-symbol"><svg class="svg-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="none" d="M21.9883291,10.9947074 L21.9888849,16.275793 C21.9888849,17.7383249 20.8471803,18.9341973 19.4064072,19.0207742 L19.2388849,19.025793 L4.76104885,19.025793 C3.29851702,19.025793 2.10264457,17.8840884 2.01606765,16.4433154 L2.01104885,16.275793 L2.01032912,10.9947074 L21.9883291,10.9947074 Z M18.2529045,14.5 L15.7529045,14.5 L15.6511339,14.5068466 C15.2850584,14.556509 15.0029045,14.8703042 15.0029045,15.25 C15.0029045,15.6296958 15.2850584,15.943491 15.6511339,15.9931534 L15.7529045,16 L18.2529045,16 L18.3546751,15.9931534 C18.7207506,15.943491 19.0029045,15.6296958 19.0029045,15.25 C19.0029045,14.8703042 18.7207506,14.556509 18.3546751,14.5068466 L18.2529045,14.5 Z M19.2388849,5.0207074 C20.7014167,5.0207074 21.8972891,6.162412 21.9838661,7.60318507 L21.9888849,7.7707074 L21.9883291,9.4947074 L2.01032912,9.4947074 L2.01104885,7.7707074 C2.01104885,6.30817556 3.15275345,5.11230312 4.59352652,5.02572619 L4.76104885,5.0207074 L19.2388849,5.0207074 Z"/></svg></span><span>تراکنش‌ها</span></a></li>
+                    <li><a href="receipts.php"><span class="menu-symbol"><?php echo icon('receipt', 'svg-icon'); ?></span><span>رسیدهای پرداخت</span><?php if ($__hdr_pending_receipts > 0): ?><span class="menu-badge"><?php echo htmlspecialchars((string)$__hdr_pending_receipts, ENT_QUOTES, 'UTF-8'); ?></span><?php endif; ?></a></li>
                     <li><a href="cancelService.php"><span class="menu-symbol"><svg class="svg-icon" viewBox="0 -4.5 31 31" aria-hidden="true"><g fill="currentColor" stroke="none"><g transform="translate(-206,-626)" fill="currentColor"><path d="M235,643 L216,643 C214.896,643 214,643.896 214,645 C214,646.104 214.896,647 216,647 L235,647 C236.104,647 237,646.104 237,645 C237,643.896 236.104,643 235,643 L235,643 Z M235,635 L216,635 C214.896,635 214,635.896 214,637 C214,638.104 214.896,639 216,639 L235,639 C236.104,639 237,638.104 237,637 C237,635.896 236.104,635 235,635 L235,635 Z M216,631 L235,631 C236.104,631 237,630.104 237,629 C237,627.896 236.104,627 235,627 L216,627 C214.896,627 214,627.896 214,629 C214,630.104 214.896,631 216,631 L216,631 Z M209,642 C207.343,642 206,643.343 206,645 C206,646.657 207.343,648 209,648 C210.657,648 212,646.657 212,645 C212,643.343 210.657,642 209,642 L209,642 Z M209,634 C207.343,634 206,635.343 206,637 C206,638.657 207.343,640 209,640 C210.657,640 212,638.657 212,637 C212,635.343 210.657,634 209,634 L209,634 Z M209,626 C207.343,626 206,627.343 206,629 C206,630.657 207.343,632 209,632 C210.657,632 212,630.657 212,629 C212,627.343 210.657,626 209,626 L209,626 Z"/></g></g></svg></span><span>لیست درخواست‌ها</span></a></li>
                     <li><a href="discounts.php"><span class="menu-symbol"><svg class="svg-icon" viewBox="0 0 511.998 511.998" aria-hidden="true"><g fill="currentColor" stroke="none"><path d="M179.34,262.92c-9.217,0-16.716,7.499-16.716,16.716s7.499,16.716,16.716,16.716c9.217,0,16.716-7.499,16.716-16.716C196.056,270.419,188.559,262.92,179.34,262.92z"/><path d="M379.934,262.92c-9.217,0-16.716,7.499-16.716,16.716s7.499,16.716,16.716,16.716c9.217,0,16.716-7.499,16.716-16.716C396.65,270.419,389.152,262.92,379.934,262.92z"/><path d="M474.505,354.619l22.789-22.805c19.596-19.573,19.616-51.325,0-70.919L291.456,55.058l-47.275,47.28c-6.529,6.529-17.107,6.53-23.638,0c-6.529-6.524-6.529-17.108,0-23.638l47.275-47.28l-16.716-16.717c-19.548-19.558-51.268-19.638-70.924,0.007l-22.811,22.794l-11.514-8.2C113.358,6.17,67.665,8.998,38.341,38.342C9.382,67.306,5.584,112.524,29.309,145.864l8.184,11.514l-22.789,22.805c-19.596,19.573-19.616,51.325,0,70.919l16.716,16.716l47.275-47.275c6.529-6.529,17.108-6.529,23.638,0c6.529,6.524,6.529,17.113,0,23.638l-47.275,47.275l205.839,205.839c19.548,19.559,51.268,19.639,70.924-0.006l22.811-22.8l11.525,8.228c32.14,22.971,77.86,20.592,107.501-9.06c28.959-28.965,32.758-74.183,9.032-107.523L474.505,354.619z M125.981,173.262l47.275-47.281c6.529-6.529,17.108-6.529,23.638,0c6.529,6.524,6.529,17.108,0,23.638l-47.275,47.281c-6.529,6.529-17.107,6.53-23.638,0C119.452,190.376,119.452,179.791,125.981,173.262z M179.34,329.785c-27.653,0-50.148-22.495-50.148-50.148s22.495-50.148,50.148-50.148s50.148,22.495,50.148,50.148S206.994,329.785,179.34,329.785z M296.353,396.649c0,9.234-7.488,16.716-16.716,16.716c-9.228,0-16.716-7.482-16.716-16.716V162.624c0-9.234,7.488-16.716,16.716-16.716c9.228,0,16.716,7.482,16.716,16.716V396.649z M379.934,329.785c-27.653,0-50.148-22.495-50.148-50.148s22.495-50.148,50.148-50.148s50.148,22.495,50.148,50.148S407.588,329.785,379.934,329.785z"/></g></svg></span><span>کدهای تخفیف</span></a></li>
                 </ul>

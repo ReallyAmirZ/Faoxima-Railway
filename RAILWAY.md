@@ -1,4 +1,4 @@
-# اجرای Faoxima v1.0.5 روی Railway
+# اجرای Faoxima v1.1.1 روی Railway
 
 این بسته از آخرین نسخه سورس اصلی Faoxima ساخته شده و لایه اجرای Railway را به آن اضافه می‌کند. در هر Deploy، تنظیمات از Variables ساخته می‌شوند، ساختار دیتابیس بدون حذف اطلاعات قبلی به‌روزرسانی می‌شود، وب‌هوک تلگرام تنظیم می‌شود و Cron داخلی هر دقیقه اجرا می‌شود.
 
@@ -74,11 +74,15 @@ https://YOUR-DOMAIN/app/
 
 اگر سرویس Railway شما همین حالا به مخزن قبلی وصل است، فایل‌های این بسته را روی همان Repository جایگزین و Commit کنید. MySQL را حذف نکنید. Railway به‌صورت خودکار نسخه جدید را Build می‌کند و Migration دیتابیس در زمان شروع اجرا می‌شود.
 
-برای جایگزینی تمیز، دو مورد قدیمی زیر را هم از Repository قبلی حذف کنید؛ در سورس اصلی جدید دیگر وجود ندارند:
+برای جایگزینی تمیز از نسخه Railway `v1.0.5`، موارد قدیمی زیر را هم از Repository حذف کنید؛ در سورس اصلی جدید دیگر وجود ندارند:
 
 ```text
-discounts.php
-app/assets/v1.0.0/
+.DS_Store
+api/handlers/CardWhitelistHandler.php
+app/assets/js/
+app/assets/v1.0.5/
+cronbot/tetrapaycheck.php
+panel/500.shtml
 ```
 
 ## رفع خطاهای رایج

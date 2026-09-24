@@ -150,13 +150,16 @@ function rx_send_banner_message($chat_id, $section, $text, $keyboard = null, $pa
     $status = is_array($setting) ? ($setting[$statusCol] ?? '0') : '0';
     $fileId = is_array($setting) ? trim((string)($setting[$fileCol] ?? '')) : '';
     if ($status == '1' && $fileId !== '') {
-        return telegram('sendphoto', [
+        $photoResult = telegram('sendphoto', [
             'chat_id' => $chat_id,
             'photo' => $fileId,
             'caption' => $text,
             'reply_markup' => $keyboard,
             'parse_mode' => $parse_mode,
         ]);
+        if (is_array($photoResult) && !empty($photoResult['ok'])) {
+            return $photoResult;
+        }
     }
     return sendmessage($chat_id, $text, $keyboard, $parse_mode);
 }
@@ -521,12 +524,18 @@ function addBackgroundImage($urlimage, $qrCodeResult, $backgroundPath)
         : 'images.jpeg';
     $basenameNoExt = pathinfo($basename, PATHINFO_FILENAME) ?: 'images';
 
-    $candidates = [
+    $candidates = [];
+    $customPath = $projectRoot . DIRECTORY_SEPARATOR . 'custom.jpg';
+    if (is_file($customPath) && is_readable($customPath) && (int) @filesize($customPath) > 0 && @getimagesize($customPath) !== false) {
+        $candidates[] = $customPath;
+    }
+    array_push(
+        $candidates,
         $projectRoot . DIRECTORY_SEPARATOR . $basenameNoExt . '.jpeg',
         $projectRoot . DIRECTORY_SEPARATOR . $basenameNoExt . '.jpg',
         $projectRoot . DIRECTORY_SEPARATOR . 'images.jpeg',
-        $projectRoot . DIRECTORY_SEPARATOR . 'images.jpg',
-    ];
+        $projectRoot . DIRECTORY_SEPARATOR . 'images.jpg'
+    );
 
     if (is_string($backgroundPath) && $backgroundPath !== '') {
         $candidates[] = $backgroundPath;
@@ -729,212 +738,11 @@ function verifyTelegramWebhookSecretToken()
     return $expected !== '' && is_string($provided) && $provided !== '' && hash_equals($expected, $provided);
 }
 
-function isTrustedReverseProxy($ip)
-{
-    if (!is_string($ip) || $ip === '') {
-        return false;
-    }
-
-    if ($ip === '127.0.0.1' || $ip === '::1') {
-        return true;
-    }
-
-    $cloudflareRanges = [
-        ['lower' => '173.245.48.0', 'upper' => '173.245.63.255'],
-        ['lower' => '103.21.244.0', 'upper' => '103.21.247.255'],
-        ['lower' => '103.22.200.0', 'upper' => '103.22.203.255'],
-        ['lower' => '103.31.4.0',   'upper' => '103.31.7.255'],
-        ['lower' => '141.101.64.0', 'upper' => '141.101.127.255'],
-        ['lower' => '108.162.192.0','upper' => '108.162.255.255'],
-        ['lower' => '190.93.240.0', 'upper' => '190.93.255.255'],
-        ['lower' => '188.114.96.0', 'upper' => '188.114.111.255'],
-        ['lower' => '197.234.240.0','upper' => '197.234.243.255'],
-        ['lower' => '198.41.128.0', 'upper' => '198.41.255.255'],
-        ['lower' => '162.158.0.0',  'upper' => '162.159.255.255'],
-        ['lower' => '104.16.0.0',   'upper' => '104.31.255.255'],
-        ['lower' => '172.64.0.0',   'upper' => '172.71.255.255'],
-        ['lower' => '131.0.72.0',   'upper' => '131.0.75.255'],
-        ['lower' => '2400:cb00::',  'upper' => '2400:cb00:ffff:ffff:ffff:ffff:ffff:ffff'],
-        ['lower' => '2606:4700::',  'upper' => '2606:4700:ffff:ffff:ffff:ffff:ffff:ffff'],
-        ['lower' => '2803:f800::',  'upper' => '2803:f800:ffff:ffff:ffff:ffff:ffff:ffff'],
-        ['lower' => '2405:b500::',  'upper' => '2405:b500:ffff:ffff:ffff:ffff:ffff:ffff'],
-        ['lower' => '2405:8100::',  'upper' => '2405:8100:ffff:ffff:ffff:ffff:ffff:ffff'],
-        ['lower' => '2a06:98c0::',  'upper' => '2a06:98c7:ffff:ffff:ffff:ffff:ffff:ffff'],
-        ['lower' => '2c0f:f248::',  'upper' => '2c0f:f24f:ffff:ffff:ffff:ffff:ffff:ffff'],
-    ];
-
-    foreach ($cloudflareRanges as $range) {
-        if (isClientIpInRange($ip, $range['lower'], $range['upper'])) {
-            return true;
-        }
-    }
-
-    $extraProxies = getenv('TRUSTED_PROXIES') ?: ($_ENV['TRUSTED_PROXIES'] ?? '');
-    if ($extraProxies !== '') {
-        $allowedList = array_map('trim', explode(',', $extraProxies));
-        if (in_array($ip, $allowedList, true)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 function checktelegramip()
 {
     return verifyTelegramWebhookSecretToken() === true;
 }
 
-function getClientIpConsideringProxies()
-{
-    $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? null;
-    if (is_string($remoteAddr)) {
-        $remoteAddr = trim($remoteAddr);
-    }
-
-    if (empty($remoteAddr) || !filter_var($remoteAddr, FILTER_VALIDATE_IP)) {
-        return null;
-    }
-
-    if (!isTrustedReverseProxy($remoteAddr)) {
-        return $remoteAddr;
-    }
-
-    $headers = [
-        'HTTP_CF_CONNECTING_IP',
-        'HTTP_TRUE_CLIENT_IP',
-        'HTTP_X_FORWARDED_FOR',
-        'HTTP_X_REAL_IP',
-        'HTTP_CLIENT_IP',
-        'HTTP_FORWARDED',
-    ];
-
-    foreach ($headers as $header) {
-        if (empty($_SERVER[$header]) || !is_string($_SERVER[$header])) {
-            continue;
-        }
-
-        $rawValue = trim($_SERVER[$header]);
-        if ($rawValue === '') {
-            continue;
-        }
-
-        $candidateIps = extractClientIpsFromHeader($rawValue, $header);
-        foreach ($candidateIps as $candidate) {
-            $candidate = normaliseProxyIpCandidate($candidate);
-            if ($candidate === null || $candidate === '') {
-                continue;
-            }
-
-            if (!filter_var($candidate, FILTER_VALIDATE_IP)) {
-                continue;
-            }
-
-            if (!isPublicIpAddress($candidate)) {
-                continue;
-            }
-
-            return $candidate;
-        }
-    }
-
-    return $remoteAddr;
-}
-
-function extractClientIpsFromHeader($value, $header)
-{
-    switch ($header) {
-        case 'HTTP_X_FORWARDED_FOR':
-            $parts = preg_split('/\s*,\s*/', $value);
-            return $parts !== false ? $parts : [];
-        case 'HTTP_FORWARDED':
-            $matches = [];
-            preg_match_all('/for=([^;,"]+|"[^"]+")/i', $value, $matches);
-            $results = [];
-            foreach ($matches[1] ?? [] as $match) {
-                $results[] = $match;
-            }
-            return $results;
-        default:
-            return [$value];
-    }
-}
-
-function normaliseProxyIpCandidate($candidate)
-{
-    if (!is_string($candidate)) {
-        return null;
-    }
-
-    $candidate = trim($candidate);
-    if ($candidate === '') {
-        return null;
-    }
-
-    $candidate = trim($candidate, "\"' ");
-
-    if (stripos($candidate, 'for=') === 0) {
-        $candidate = substr($candidate, 4);
-        $candidate = ltrim($candidate, '=');
-    }
-
-    $candidate = trim($candidate, "\"' ");
-
-    if (strpos($candidate, '[') === 0) {
-        $closingBracket = strpos($candidate, ']');
-        if ($closingBracket !== false) {
-            $candidate = substr($candidate, 1, $closingBracket - 1);
-        }
-    }
-
-    $candidate = trim($candidate, '[]');
-
-    if (strpos($candidate, ':') !== false && substr_count($candidate, ':') === 1 && strpos($candidate, '.') !== false) {
-        [$possibleIp, $possiblePort] = explode(':', $candidate, 2);
-        $possiblePort = trim($possiblePort);
-        if ($possiblePort === '' || ctype_digit(str_replace([' ', "\t"], '', $possiblePort))) {
-            $candidate = $possibleIp;
-        }
-    }
-
-    if (strpos($candidate, '%') !== false) {
-        $candidateWithoutZone = preg_replace('/%.*$/', '', $candidate);
-        if (is_string($candidateWithoutZone)) {
-            $candidate = $candidateWithoutZone;
-        }
-    }
-
-    $candidate = trim($candidate);
-
-    return $candidate === '' ? null : $candidate;
-}
-
-function isPublicIpAddress($ipAddress)
-{
-    return filter_var(
-        $ipAddress,
-        FILTER_VALIDATE_IP,
-        FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-    ) !== false;
-}
-
-function isClientIpInRange($clientIp, $lowerBound, $upperBound)
-{
-    $clientPacked = inet_pton($clientIp);
-    $lowerPacked = inet_pton($lowerBound);
-    $upperPacked = inet_pton($upperBound);
-
-    if ($clientPacked === false || $lowerPacked === false || $upperPacked === false) {
-        return false;
-    }
-
-    $length = strlen($clientPacked);
-    if ($length !== strlen($lowerPacked) || $length !== strlen($upperPacked)) {
-        return false;
-    }
-
-    return strcmp($clientPacked, $lowerPacked) >= 0 && strcmp($clientPacked, $upperPacked) <= 0;
-}
 function defaultCronStatusMap()
 {
     return [
@@ -1173,12 +981,6 @@ function replaceCronJobsMatchingStatus($pattern, $newCommands)
     }
 
     return ['status' => $verifyOk ? 'success' : 'error', 'user' => $cronUser];
-}
-
-function replaceCronJobsMatching($pattern, $newCommands)
-{
-    $result = replaceCronJobsMatchingStatus($pattern, $newCommands);
-    return $result['status'] !== 'error';
 }
 
 function rxActivecronPattern($domainhosts)
@@ -1641,11 +1443,6 @@ function faoxima_public_purchase_log_event(string $eventKey, array $vars, ?array
     } catch (\Throwable $rx_pl_enqueue_err) {
     }
 }
-function generateAuthStr($length = 10)
-{
-    $characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    return substr(str_shuffle(str_repeat($characters, ceil($length / strlen($characters)))), 0, $length);
-}
 define('QR_MAX_BYTES', 2048);
 
 if (!function_exists('rx_copy_button_keyboard')) {
@@ -1767,11 +1564,6 @@ function check_active_btn($keyboard, $text_var)
     return $status;
 }
 
-function rx_usertest_panel_active()
-{
-    $count = select("marzban_panel", "*", "TestAccount", "ONTestAccount", "count");
-    return is_numeric($count) && (int)$count > 0;
-}
 function CreatePaymentNv($invoice_id, $amount)
 {
     global $domainhosts;
@@ -1800,4 +1592,78 @@ function CreatePaymentNv($invoice_id, $amount)
     $result = curl_exec($ch);
     curl_close($ch);
     return json_decode($result, true);
+}
+
+if (!function_exists('rx_sendTopicReport')) {
+    function rx_sendTopicReport(array $params, array $context = [])
+    {
+        $chatId = trim((string) ($params['chat_id'] ?? ''));
+        if ($chatId === '' || $chatId === '0') {
+            return false;
+        }
+        $params['chat_id'] = $chatId;
+        $maxAttempts = 3;
+        $maxRetryAfter = 5;
+        $timeBudget = 15.0;
+        $startedAt = microtime(true);
+        $plainFallbackUsed = false;
+        $response = null;
+        $errorCode = 0;
+        $description = '';
+        $retryAfter = 0;
+        $attempt = 0;
+        while ($attempt < $maxAttempts) {
+            $attempt++;
+            try {
+                $response = telegram('sendmessage', $params);
+            } catch (Throwable $e) {
+                $response = ['ok' => false, 'error_code' => 0, 'description' => $e->getMessage()];
+            }
+            if (is_array($response) && !empty($response['ok'])) {
+                return $response;
+            }
+            $errorCode = is_array($response) ? (int) ($response['error_code'] ?? 0) : 0;
+            $description = is_array($response) ? (string) ($response['description'] ?? '') : 'empty response';
+            $retryAfter = is_array($response) ? (int) ($response['parameters']['retry_after'] ?? 0) : 0;
+            if (!$plainFallbackUsed && !empty($params['parse_mode']) && stripos($description, "can't parse entities") !== false) {
+                $plainFallbackUsed = true;
+                $params['text'] = html_entity_decode(strip_tags((string) ($params['text'] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                unset($params['parse_mode']);
+                continue;
+            }
+            $class = function_exists('rx_broadcast_classify') ? rx_broadcast_classify($response) : ['temporary' => false, 'manual' => true];
+            if (empty($class['temporary']) || !empty($class['manual']) || $attempt >= $maxAttempts) {
+                break;
+            }
+            $wait = $errorCode === 429 ? max(1, $retryAfter) : $attempt;
+            if ($wait > $maxRetryAfter || (microtime(true) - $startedAt + $wait) > $timeBudget) {
+                break;
+            }
+            sleep($wait);
+        }
+        $threadId = (string) ($params['message_thread_id'] ?? '');
+        $parameters = is_array($response) && isset($response['parameters']) ? $response['parameters'] : null;
+        $logContext = [
+            'status' => $errorCode,
+            'body' => $chatId . '|' . $threadId . '|' . implode('|', array_map('strval', array_filter($context, 'is_scalar'))),
+            'chat_id' => $chatId,
+            'message_thread_id' => $threadId,
+            'error_code' => $errorCode,
+            'description' => $description,
+            'retry_after' => $retryAfter,
+            'parameters' => $parameters !== null ? json_encode($parameters) : '',
+            'attempts' => $attempt,
+        ];
+        foreach ($context as $key => $value) {
+            if (is_scalar($value) && !isset($logContext[$key])) {
+                $logContext[$key] = $value;
+            }
+        }
+        if (function_exists('rx_log_event')) {
+            rx_log_event('TOPIC_REPORT_FAILED', 'Purchase report could not be delivered to the report topic', $logContext);
+        } else {
+            error_log('[TOPIC_REPORT_FAILED] ' . json_encode($logContext));
+        }
+        return false;
+    }
 }

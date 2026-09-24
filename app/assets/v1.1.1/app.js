@@ -2,7 +2,7 @@ window.__FAOXIMA_APP_STARTED__ = true;
 
 import * as Telegram from './telegram.js?v=0.0.52';
 import { verify, submitPhone } from './api.js?v=0.0.52';
-import { start as startRouter } from './router.js?v=0.0.54';
+import { start as startRouter } from './router.js?v=0.0.57';
 import { getToken, clearToken } from './state.js?v=0.0.52';
 import { loadSavedTheme } from './pages/settings.js?v=0.0.52';
 import { loadBrandFromServer } from './brand.js?v=0.0.52';
@@ -239,8 +239,8 @@ function applyStartParam() {
             : '';
         if (!sp) return;
 
-        if (sp.startsWith('plisiopaid_') || sp.startsWith('plisiofail_')) {
-            const order = sp.replace(/^plisio(paid|fail)_/, '');
+        if (sp.startsWith('plisiopaid_') || sp.startsWith('plisiofail_') || sp.startsWith('abangatewaypaid_')) {
+            const order = sp.replace(/^(plisio(paid|fail)|abangatewaypaid)_/, '');
             if (order) {
                 const want = '#/watch/' + encodeURIComponent(order);
                 if (window.location.hash !== want) {

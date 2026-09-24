@@ -57,6 +57,14 @@ final class PaymentInitHandler extends BaseHandler
             FaoximaResponse::fail(409, faoxima_textbot_get('dyn_paymentinit_pending_request_exists', '⏳ یک درخواست پرداخت در انتظار بررسی دارید. لطفاً ابتدا آن را تکمیل یا لغو کنید.'));
         }
 
+        register_shutdown_function(static function () use ($pdo, $lockName): void {
+            try {
+                $releaseStmt = $pdo->prepare('SELECT RELEASE_LOCK(:n)');
+                $releaseStmt->execute([':n' => $lockName]);
+            } catch (Throwable $e) {
+            }
+        });
+
         try {
             if ($method === 'carttocart' || $method === 'carttocart_pv') {
                 $this->purgeStaleCarttocart((int)$this->user['id']);
@@ -187,12 +195,16 @@ final class PaymentInitHandler extends BaseHandler
                     $this->handleBluPal($amount);
                     return;
 
-                case 'atlaspay':
-                    $this->handleAtlasPay($amount);
+                case 'variza':
+                    $this->handleVariza($amount);
                     return;
 
-                case 'tetrapay':
-                    $this->handleTetraPay($amount);
+                case 'abangateway':
+                    $this->handleAbanGateway($amount);
+                    return;
+
+                case 'atlaspay':
+                    $this->handleAtlasPay($amount);
                     return;
 
                 case 'plisio':
@@ -363,11 +375,15 @@ final class PaymentInitHandler extends BaseHandler
         if ($method === 'cubepay') {
             return 60;
         }
+        if ($method === 'variza') {
+            return 60;
+        }
+        if ($method === 'abangateway') {
+            // Its invoices stay open for 30 minutes by default.
+            return 30;
+        }
         if ($method === 'atlaspay') {
             return 20;
-        }
-        if ($method === 'tetrapay') {
-            return 10;
         }
         return self::STALE_UNPAID_MINUTES;
     }
@@ -405,8 +421,9 @@ final class PaymentInitHandler extends BaseHandler
             'tonpay'        => ['minbalancetonpay',        'maxbalancetonpay'],
             'cubepay'       => ['minbalancecubepay',       'maxbalancecubepay'],
             'blupal'        => ['minbalanceblupal',        'maxbalanceblupal'],
+            'variza'        => ['minbalancevariza',        'maxbalancevariza'],
+            'abangateway'   => ['minbalanceabangateway',   'maxbalanceabangateway'],
             'atlaspay'      => ['minbalanceatlaspay',      'maxbalanceatlaspay'],
-            'tetrapay'      => ['minbalancetetrapay',      'maxbalancetetrapay'],
         ];
 
         $minMethod = 0;
@@ -614,11 +631,6 @@ final class PaymentInitHandler extends BaseHandler
     }
 
 
-    private function buildCryptoUrlFallback(string $method, int $amount): string
-    {
-        return $this->botDeepLink('miniapp_pay_' . $method);
-    }
-
     private function handleTronado(int $amount): void
     {
         if (!function_exists('trnado')) {
@@ -777,62 +789,6 @@ final class PaymentInitHandler extends BaseHandler
     }
 
 
-    private function handleTetraPay(int $amount): void
-    {
-        if (!function_exists('tetrapayCreatePaymentLink')) {
-            FaoximaResponse::fail(503, faoxima_textbot_get('dyn_paymentinit_tetrapay_function_missing', '❌ تابع درگاه تتراپی روی این سرور موجود نیست.'));
-        }
-
-        $minRow = select('PaySetting', 'ValuePay', 'NamePay', 'minbalancetetrapay', 'select');
-        $maxRow = select('PaySetting', 'ValuePay', 'NamePay', 'maxbalancetetrapay', 'select');
-        $min = is_array($minRow) ? (int)($minRow['ValuePay'] ?? 0) : 0;
-        $max = is_array($maxRow) ? (int)($maxRow['ValuePay'] ?? 0) : 0;
-        if ($min > 0 && $amount < $min) {
-            FaoximaResponse::fail(422, faoxima_render_text(faoxima_textbot_get('dyn_paymentinit_min_amount', '❌ حداقل مبلغ پرداخت {min} تومان است.'), ['min' => number_format($min)]));
-        }
-        if ($max > 0 && $amount > $max) {
-            FaoximaResponse::fail(422, faoxima_render_text(faoxima_textbot_get('dyn_paymentinit_max_amount', '❌ حداکثر مبلغ پرداخت {max} تومان است.'), ['max' => number_format($max)]));
-        }
-
-        $orderId = bin2hex(random_bytes(5));
-
-        $this->insertPaymentReport('tetrapay', $amount, $orderId);
-
-        try {
-            $pay = tetrapayCreatePaymentLink($amount);
-        } catch (Throwable $e) {
-            FaoximaLogger::userFacing('tetrapayCreatePaymentLink() threw', ['err' => $e->getMessage()]);
-            FaoximaResponse::fail(502, faoxima_textbot_get('dyn_paymentinit_gateway_generic_error', '❌ خطا در ارتباط با درگاه پرداخت.'));
-        }
-
-        $token = is_array($pay) ? trim((string)($pay['token'] ?? '')) : '';
-        $paymentLink = is_array($pay) ? trim((string)($pay['link'] ?? '')) : '';
-        $trackingCode = is_array($pay) ? trim((string)($pay['tracking_code'] ?? '')) : '';
-
-        if ($token === '' || $paymentLink === '') {
-            $errMsg = is_array($pay) ? json_encode($pay, JSON_UNESCAPED_UNICODE) : 'unknown';
-            FaoximaLogger::userFacing('tetrapayCreatePaymentLink() returned bad response', ['raw' => $errMsg]);
-            update('Payment_report', 'payment_Status', 'reject', 'id_order', $orderId);
-            update('Payment_report', 'dec_not_confirmed', $errMsg, 'id_order', $orderId);
-            FaoximaResponse::fail(502, faoxima_textbot_get('dyn_paymentinit_payment_link_creation_failed', '❌ ساخت لینک پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.'));
-        }
-
-        $totalAmountToman = is_array($pay) && isset($pay['total_amount']) ? (int) $pay['total_amount'] : $amount;
-
-        update('Payment_report', 'tetrapay_token', $token, 'id_order', $orderId);
-        update('Payment_report', 'tetrapay_tracking_code', $trackingCode, 'id_order', $orderId);
-        update('Payment_report', 'tetrapay_payment_link', $paymentLink, 'id_order', $orderId);
-        update('Payment_report', 'price', $totalAmountToman, 'id_order', $orderId);
-
-        FaoximaResponse::ok([
-            'kind'     => 'url',
-            'url'      => $paymentLink,
-            'order_id' => $orderId,
-            'message'  => faoxima_textbot_get('dyn_paymentinit_click_link_to_pay', '🌸 برای تکمیل پرداخت روی لینک زیر کلیک کنید.'),
-        ]);
-    }
-
-
     private function handleBluPal(int $amount): void
     {
         if (!function_exists('blupalCreateInvoice')) {
@@ -878,6 +834,104 @@ final class PaymentInitHandler extends BaseHandler
         FaoximaResponse::ok([
             'kind'     => 'url',
             'url'      => $paymentLink,
+            'order_id' => $orderId,
+            'message'  => faoxima_textbot_get('dyn_paymentinit_click_link_to_pay', '🌸 برای تکمیل پرداخت روی لینک زیر کلیک کنید.'),
+        ]);
+    }
+
+
+    private function handleVariza(int $amount): void
+    {
+        if (!function_exists('varizaCreatePayment')) {
+            FaoximaResponse::fail(503, faoxima_textbot_get('dyn_paymentinit_variza_function_missing', '❌ تابع درگاه واریزا روی این سرور موجود نیست.'));
+        }
+
+        $minRow = select('PaySetting', 'ValuePay', 'NamePay', 'minbalancevariza', 'select');
+        $maxRow = select('PaySetting', 'ValuePay', 'NamePay', 'maxbalancevariza', 'select');
+        $min = is_array($minRow) ? (int)($minRow['ValuePay'] ?? 0) : 0;
+        $max = is_array($maxRow) ? (int)($maxRow['ValuePay'] ?? 0) : 0;
+        if ($min > 0 && $amount < $min) {
+            FaoximaResponse::fail(422, faoxima_render_text(faoxima_textbot_get('dyn_paymentinit_min_amount', '❌ حداقل مبلغ پرداخت {min} تومان است.'), ['min' => number_format($min)]));
+        }
+        if ($max > 0 && $amount > $max) {
+            FaoximaResponse::fail(422, faoxima_render_text(faoxima_textbot_get('dyn_paymentinit_max_amount', '❌ حداکثر مبلغ پرداخت {max} تومان است.'), ['max' => number_format($max)]));
+        }
+
+        $orderId = bin2hex(random_bytes(5));
+
+        $this->insertPaymentReport('variza', $amount, $orderId);
+
+        try {
+            $pay = varizaCreatePayment($orderId, $amount);
+        } catch (Throwable $e) {
+            FaoximaLogger::userFacing('varizaCreatePayment() threw', ['err' => $e->getMessage()]);
+            FaoximaResponse::fail(502, faoxima_textbot_get('dyn_paymentinit_gateway_generic_error', '❌ خطا در ارتباط با درگاه پرداخت.'));
+        }
+
+        $slug = is_array($pay) ? trim((string)($pay['slug'] ?? '')) : '';
+        $paymentLink = is_array($pay) ? trim((string)($pay['pay_url'] ?? '')) : '';
+
+        if ($slug === '' || $paymentLink === '') {
+            $errMsg = is_array($pay) ? json_encode($pay, JSON_UNESCAPED_UNICODE) : 'unknown';
+            FaoximaLogger::userFacing('varizaCreatePayment() returned bad response', ['raw' => $errMsg]);
+            update('Payment_report', 'payment_Status', 'reject', 'id_order', $orderId);
+            update('Payment_report', 'dec_not_confirmed', $errMsg, 'id_order', $orderId);
+            FaoximaResponse::fail(502, faoxima_textbot_get('dyn_paymentinit_payment_link_creation_failed', '❌ ساخت لینک پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.'));
+        }
+
+        update('Payment_report', 'dec_not_confirmed', $slug, 'id_order', $orderId);
+
+        FaoximaResponse::ok([
+            'kind'     => 'url',
+            'url'      => $paymentLink,
+            'order_id' => $orderId,
+            'message'  => faoxima_textbot_get('dyn_paymentinit_click_link_to_pay', '🌸 برای تکمیل پرداخت روی لینک زیر کلیک کنید.'),
+        ]);
+    }
+
+
+    private function handleAbanGateway(int $amount): void
+    {
+        if (!function_exists('abangatewayCreatePayment')) {
+            FaoximaResponse::fail(503, faoxima_textbot_get('dyn_paymentinit_abangateway_function_missing', '❌ تابع درگاه آبان گیت وی روی این سرور موجود نیست.'));
+        }
+
+        $minRow = select('PaySetting', 'ValuePay', 'NamePay', 'minbalanceabangateway', 'select');
+        $maxRow = select('PaySetting', 'ValuePay', 'NamePay', 'maxbalanceabangateway', 'select');
+        $min = is_array($minRow) ? (int)($minRow['ValuePay'] ?? 0) : 0;
+        $max = is_array($maxRow) ? (int)($maxRow['ValuePay'] ?? 0) : 0;
+        if ($min > 0 && $amount < $min) {
+            FaoximaResponse::fail(422, faoxima_render_text(faoxima_textbot_get('dyn_paymentinit_min_amount', '❌ حداقل مبلغ پرداخت {min} تومان است.'), ['min' => number_format($min)]));
+        }
+        if ($max > 0 && $amount > $max) {
+            FaoximaResponse::fail(422, faoxima_render_text(faoxima_textbot_get('dyn_paymentinit_max_amount', '❌ حداکثر مبلغ پرداخت {max} تومان است.'), ['max' => number_format($max)]));
+        }
+
+        $orderId = bin2hex(random_bytes(5));
+
+        $this->insertPaymentReport('abangateway', $amount, $orderId);
+
+        try {
+            $pay = abangatewayCreatePayment($orderId, $amount, $this->user['id'] ?? null);
+        } catch (Throwable $e) {
+            FaoximaLogger::userFacing('abangatewayCreatePayment() threw', ['err' => $e->getMessage()]);
+            FaoximaResponse::fail(502, faoxima_textbot_get('dyn_paymentinit_gateway_generic_error', '❌ خطا در ارتباط با درگاه پرداخت.'));
+        }
+
+        // Success is only reported with an authority and an https link in hand.
+        if (!is_array($pay) || empty($pay['success'])) {
+            $errMsg = is_array($pay) ? json_encode($pay, JSON_UNESCAPED_UNICODE) : 'unknown';
+            FaoximaLogger::userFacing('abangatewayCreatePayment() returned bad response', ['raw' => $errMsg]);
+            update('Payment_report', 'payment_Status', 'reject', 'id_order', $orderId);
+            update('Payment_report', 'dec_not_confirmed', $errMsg, 'id_order', $orderId);
+            FaoximaResponse::fail(502, faoxima_textbot_get('dyn_paymentinit_payment_link_creation_failed', '❌ ساخت لینک پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.'));
+        }
+
+        update('Payment_report', 'dec_not_confirmed', (string) $pay['authority'], 'id_order', $orderId);
+
+        FaoximaResponse::ok([
+            'kind'     => 'url',
+            'url'      => (string) $pay['pay_url'],
             'order_id' => $orderId,
             'message'  => faoxima_textbot_get('dyn_paymentinit_click_link_to_pay', '🌸 برای تکمیل پرداخت روی لینک زیر کلیک کنید.'),
         ]);
@@ -1057,22 +1111,6 @@ final class PaymentInitHandler extends BaseHandler
             'order_id' => $orderId,
             'message'  => faoxima_textbot_get('dyn_paymentinit_nowpayment_invoice_created', 'فاکتور ارزی NowPayments ساخته شد. روی لینک کلیک کنید.'),
         ]);
-    }
-
-    private function botDeepLink(string $startParam): string
-    {
-        global $usernamebot, $username;
-        $bot = '';
-        if (isset($usernamebot) && is_string($usernamebot)) {
-            $bot = ltrim(trim($usernamebot), '@');
-        }
-        if ($bot === '' && isset($username) && is_string($username)) {
-            $bot = ltrim(trim($username), '@');
-        }
-        if ($bot === '') {
-            FaoximaResponse::fail(503, faoxima_textbot_get('dyn_paymentinit_bot_username_not_configured', '❌ نام کاربری ربات روی سرور ثبت نشده است.'));
-        }
-        return 'https://t.me/' . $bot . '?start=' . $startParam;
     }
 
     private function insertPaymentReport(string $method, int $amount, string $orderId, ?string $extId = null): void

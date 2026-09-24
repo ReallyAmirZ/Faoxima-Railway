@@ -1,9 +1,5 @@
 <?php
 
-@ini_set('display_errors', '1');
-@ini_set('display_startup_errors', '1');
-@error_reporting(E_ALL);
-
 if (!defined('FAOXIMA_SKIP_BOTAPI_ROUTER')) {
     define('FAOXIMA_SKIP_BOTAPI_ROUTER', true);
 }
@@ -697,10 +693,10 @@ function faoxima_ms_status_label(string $s): array
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>فروش دستی | پنل فاکسیما</title>
-    <link rel="stylesheet" href="css/theme.css?v=flat47">
+    <link rel="stylesheet" href="css/theme.css?v=flat50">
     <link rel="stylesheet" href="css/admin-extra.css?v=flat33">
     <link rel="stylesheet" href="css/components.css?v=flat33">
-    <script src="js/theme.js?v=flat5" defer></script>
+    <script src="js/theme.js?v=flat50" defer></script>
     <style>
         .ms-row__title .badge {
             font-size: 10.5px;
@@ -1908,21 +1904,27 @@ function faoxima_ms_status_label(string $s): array
             var productSel = document.getElementById('ms-product-select');
             if (panelSel && productSel) {
                 var allOptions = Array.prototype.slice.call(productSel.options);
+                var productPicked = false;
+                productSel.addEventListener('change', function() { productPicked = true; });
 
                 function filterProducts() {
                     var opt = panelSel.options[panelSel.selectedIndex];
                     var panelName = opt ? (opt.getAttribute('data-name-panel') || '') : '';
                     var firstVisible = null;
+                    var firstProduct = null;
                     allOptions.forEach(function(o) {
                         var loc = o.getAttribute('data-location') || '';
-                        var show = (loc === '/all' || loc === panelName);
+                        var locParts = loc.split(',').map(function(s) { return s.trim(); });
+                        var show = (loc === '/all' || (panelName !== '' && locParts.indexOf(panelName) !== -1));
                         o.hidden = !show;
                         o.disabled = !show;
                         if (show && firstVisible === null) firstVisible = o;
+                        if (show && firstProduct === null && o.value !== 'usertest') firstProduct = o;
                     });
                     var cur = productSel.options[productSel.selectedIndex];
-                    if (!cur || cur.hidden) {
-                        if (firstVisible) firstVisible.selected = true;
+                    if (!cur || cur.hidden || (!productPicked && cur.value === 'usertest' && firstProduct)) {
+                        var pick = firstProduct || firstVisible;
+                        if (pick) pick.selected = true;
                     }
                 }
                 panelSel.addEventListener('change', filterProducts);

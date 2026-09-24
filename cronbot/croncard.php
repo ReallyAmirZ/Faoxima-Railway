@@ -50,7 +50,7 @@ $datatextbot = array(
     'text_wgdashboard' => ''
 );
 foreach ($datatxtbot as $item) {
-    if (isset($datatextbot[$item['id_text']])) {
+    if (array_key_exists($item['id_text'], $datatextbot) || (is_string($item['text']) && trim($item['text']) !== '')) {
         $datatextbot[$item['id_text']] = $item['text'];
     }
 }
@@ -113,7 +113,7 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         if (!is_array($privateReceiptTargets)) {
             $privateReceiptTargets = [];
         }
-        DirectPayment($Payment_report['id_order'],"../images.jpg");
+        $directPaymentResult = DirectPayment($Payment_report['id_order'],"../images.jpg");
         $Payment_report_after = select("Payment_report", "*", "id_order", $Payment_report['id_order'], "select", ['cache' => false]);
         $directPaymentDone = is_array($Payment_report_after) && intval($Payment_report_after['direct_payment_done'] ?? 0) === 1;
         $alreadyPaid = is_array($Payment_report_after) && $Payment_report_after['payment_Status'] === 'paid';
@@ -124,6 +124,16 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             $alreadyPaid = $finalizeCard->rowCount() > 0;
             if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
         }
+        if (!$alreadyPaid && !$directPaymentDone && is_array($directPaymentResult) && ($directPaymentResult['retryable'] ?? true) === false) {
+            $terminalCard = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'reject', dec_not_confirmed = :reason WHERE id_order = :id AND payment_Status = 'processing'");
+            $terminalCard->bindValue(':reason', (string)($directPaymentResult['reason'] ?? 'invoice_not_found'), PDO::PARAM_STR);
+            $terminalCard->bindValue(':id', $Payment_report['id_order'], PDO::PARAM_STR);
+            $terminalCard->execute();
+            if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
+            if ($terminalCard->rowCount() > 0) {
+                continue;
+            }
+        }
         if (!$alreadyPaid && !$directPaymentDone) {
             $rollbackCard = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'waiting' WHERE id_order = :id AND payment_Status = 'processing'");
             $rollbackCard->bindValue(':id', $Payment_report['id_order'], PDO::PARAM_STR);
@@ -133,6 +143,8 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         }
         $Balance_id = select("user","*","id",$Payment_report['id_user'],"select");
         $format_price_auto = number_format($Payment_report['price']);
+        $rxFmtBalanceBeforeAuto = rxFormatToman($balanceBeforeAuto);
+        $rxFmtBalanceAfterAuto = rxFormatToman($Balance_id['Balance']);
         $text_financereport = "📣 پرداخت به‌صورت خودکار تایید شد.
 
 اطلاعات :
@@ -142,8 +154,8 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
 <blockquote>👤 نام کاربری کاربر : @{$Balance_id['username']}</blockquote>
 <blockquote>💰 مبلغ پرداخت : $format_price_auto</blockquote>
 <blockquote>کد پیگیری پرداخت : {$Payment_report['id_order']}</blockquote>
-<blockquote>💎 موجودی قبل : $balanceBeforeAuto</blockquote>
-<blockquote>💎 موجودی بعد : {$Balance_id['Balance']}</blockquote>";
+<blockquote>💎 موجودی قبل : {$rxFmtBalanceBeforeAuto}</blockquote>
+<blockquote>💎 موجودی بعد : {$rxFmtBalanceAfterAuto}</blockquote>";
         if (strlen($setting['Channel_Report']) > 0) {
             telegram('sendmessage', [
                 'chat_id' => $setting['Channel_Report'],
@@ -165,13 +177,14 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             wallet_ledger_record($Balance_id['id'], 'credit', $result, 'cashback', 'هدیه بازگشت وجه کارت به کارت (تایید خودکار)', $Payment_report['id_order']);
         }
         $pricecashback =  number_format($pricecashback);
-        $text_report = "🎁 کاربر عزیز مبلغ $result تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
+        $text_report = "🎁 کاربر عزیز مبلغ " . rxFormatToman($result) . " تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
         sendmessage($Balance_id['id'], $text_report, null, 'HTML');
     }
+    $rxFmtCroncardPrice = rxFormatToman($Payment_report['price']);
     $text_reportpayment = "✅ تایید شده (تایید خودکار بدون بررسی)
 
 <blockquote>آیدی عددی کاربر : {$Balance_id['id']}</blockquote>
-<blockquote>مبلغ تراکنش {$Payment_report['price']}</blockquote>
+<blockquote>مبلغ تراکنش {$rxFmtCroncardPrice}</blockquote>
 <blockquote>روش پرداخت :  تایید خودکار بدون بررسی</blockquote>
 <blockquote>{$Payment_report['Payment_Method']}</blockquote>";
     $_cron_confirm_kb = json_encode([

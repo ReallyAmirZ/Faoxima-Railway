@@ -28,8 +28,11 @@ final class PaymentMethodsHandler extends BaseHandler
         $tonpayActive   = $get('statustonpay');
         $cubepayActive  = $get('statuscubepay');
         $blupalActive   = $get('statusblupal');
+        $varizaActive   = $get('statusvariza');
+        $abangatewayActive = $get('statusabangateway');
+        $abangatewayUrl    = trim((string) $get('urlabangateway'));
+        $abangatewayKey    = trim((string) $get('apiabangateway'));
         $atlaspayActive = $get('statusatlaspay');
-        $tetrapayActive = $get('statustetrapay');
         $plisio         = $get('nowpaymentstatus');
         $nowpayment     = $get('statusnowpayment');
         $digi           = $get('digistatus');
@@ -55,8 +58,9 @@ final class PaymentMethodsHandler extends BaseHandler
             'tonpay'        => ['minbalancetonpay',        'maxbalancetonpay'],
             'cubepay'       => ['minbalancecubepay',       'maxbalancecubepay'],
             'blupal'        => ['minbalanceblupal',        'maxbalanceblupal'],
+            'variza'        => ['minbalancevariza',        'maxbalancevariza'],
+            'abangateway'   => ['minbalanceabangateway',   'maxbalanceabangateway'],
             'atlaspay'      => ['minbalanceatlaspay',      'maxbalanceatlaspay'],
-            'tetrapay'      => ['minbalancetetrapay',      'maxbalancetetrapay'],
         ];
         $methodLimitsResolver = function (string $methodId) use ($perMethodKeys, $get, $minBalance, $maxBalance): array {
             if (isset($perMethodKeys[$methodId])) {
@@ -175,14 +179,6 @@ final class PaymentMethodsHandler extends BaseHandler
                 'kind'  => 'form',
             ];
         }
-        if ($tetrapayActive === 'ontetrapay') {
-            $methods[] = [
-                'id'    => 'tetrapay',
-                'label' => $L('tetrapay', '🔷 تتراپی'),
-                'icon'  => '🔷',
-                'kind'  => 'form',
-            ];
-        }
         if ($zarinpal === 'onzarinpal') {
             $methods[] = [
                 'id'    => 'zarinpal',
@@ -196,6 +192,23 @@ final class PaymentMethodsHandler extends BaseHandler
                 'id'    => 'blupal',
                 'label' => $L('blupal', '💙 بلوپال'),
                 'icon'  => '💙',
+                'kind'  => 'form',
+            ];
+        }
+        if ($varizaActive === 'onvariza') {
+            $methods[] = [
+                'id'    => 'variza',
+                'label' => $L('variza', '💳 واریزا'),
+                'icon'  => '💳',
+                'kind'  => 'form',
+            ];
+        }
+        // Listed only when it can take money: on, with an https address and a key.
+        if ($abangatewayActive === 'onabangateway' && stripos($abangatewayUrl, 'https://') === 0 && $abangatewayKey !== '' && $abangatewayKey !== '0') {
+            $methods[] = [
+                'id'    => 'abangateway',
+                'label' => $L('abangateway', '💳 آبان گیت وی'),
+                'icon'  => '💳',
                 'kind'  => 'form',
             ];
         }

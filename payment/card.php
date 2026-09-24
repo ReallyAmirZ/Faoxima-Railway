@@ -48,7 +48,7 @@ $datatextbot = array(
     'text_wgdashboard' => ''
 );
 foreach ($datatxtbot as $item) {
-    if (isset($datatextbot[$item['id_text']])) {
+    if (array_key_exists($item['id_text'], $datatextbot) || (is_string($item['text']) && trim($item['text']) !== '')) {
         $datatextbot[$item['id_text']] = $item['text'];
     }
 }
@@ -103,7 +103,6 @@ if(preg_match('/انتقال اينترنت:\D*([\d,]+)/u', $valuepost, $matches
     $amountInteger = str_replace(',', '', $matches[1])*0.1;
 }}elseif($name_bank  == "parsian"){
 if(preg_match('/مبلغ:(\d{1,3}(?:,\d{3})*)\+/', $valuepost, $matches)) {
-    file_put_contents('ss',json_encode($matches));
     $amountInteger = str_replace(',', '', $matches[1])*0.1;
 }}elseif($name_bank  == "sphe"){
 if(preg_match('/مبلغ:\s*([\d,]+)\s*ريال/', $valuepost, $matches)) {
@@ -148,8 +147,14 @@ if(isset($amountInteger) && $amountInteger !== NULL){
             'cache_time' => 5,
         ));
         return;}
+        $_claim = $connect->prepare("UPDATE Payment_report SET payment_Status = 'paid' WHERE id_order = ? AND (payment_Status = 'Unpaid' OR payment_Status = 'waiting')");
+        $_claim->bind_param("s", $order_id);
+        $_claim->execute();
+        $_claimed = $_claim->affected_rows;
+        $_claim->close();
+        if ($_claimed < 1) return;
+        if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
         DirectPayment($order_id,"../images.jpg");
-        update("Payment_report","payment_Status","paid",'id_order',$order_id);
     $_uid2 = $Payment_report['id_user'];
     $_stmt = $connect->prepare("SELECT Balance FROM user WHERE id = ? LIMIT 1");
     $_stmt->bind_param("s", $_uid2);
@@ -160,7 +165,7 @@ if(isset($amountInteger) && $amountInteger !== NULL){
     $text_report = "یک رسید توسط ربات  تایید شد
 
 اطلاعات :
-<blockquote>💰 مبلغ پرداخت : {$Payment_report['price']}</blockquote>
+<blockquote>💰 مبلغ پرداخت : " . rxFormatToman($Payment_report['price']) . "</blockquote>
 <blockquote>👤  آیدی عددی کاربر : {$Balance_id['id']}</blockquote>
 <blockquote>👤 نام کاربری کاربر : @{$Balance_id['username']}</blockquote>
 <blockquote>موجودی کاربر : $balanceformatsell تومان</blockquote>

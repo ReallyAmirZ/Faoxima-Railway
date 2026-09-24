@@ -56,7 +56,7 @@ $datatextbot = array(
     'text_wgdashboard' => ''
 );
 foreach ($datatxtbot as $item) {
-    if (isset($datatextbot[$item['id_text']])) {
+    if (array_key_exists($item['id_text'], $datatextbot) || (is_string($item['text']) && trim($item['text']) !== '')) {
         $datatextbot[$item['id_text']] = $item['text'];
     }
 }
@@ -122,7 +122,7 @@ $response = json_decode($response,true);
 
     $atomic = $pdo->prepare(
         "UPDATE Payment_report SET payment_Status = 'paid' "
-        . "WHERE id_order = :id AND payment_Status <> 'paid'"
+        . "WHERE id_order = :id AND payment_Status NOT IN ('paid', 'cancelled')"
     );
     $atomic->bindValue(':id', $invoice_id, PDO::PARAM_STR);
     $atomic->execute();
@@ -140,7 +140,7 @@ $response = json_decode($response,true);
         $Balance_confrim = intval($Balance_id['Balance']) +$result;
         update("user","Balance",$Balance_confrim, "id",$Balance_id['id']);
         $pricecashback =  number_format($pricecashback);
-        $text_report = "🎁 کاربر عزیز مبلغ $result تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
+        $text_report = "🎁 کاربر عزیز مبلغ " . rxFormatToman($result) . " تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
         sendmessage($Balance_id['id'], $text_report, null, 'HTML');
     }
     $paymentreports = select("topicid","idreport","report","paymentreport","select")['idreport'];

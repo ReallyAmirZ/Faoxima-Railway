@@ -475,6 +475,7 @@ try {
         addFieldToTable($tableName, 'nav_state', 'home', "VARCHAR(64)");
         addFieldToTable($tableName, 'reply_kb_cleared', '0', "VARCHAR(1)");
         addFieldToTable($tableName, 'reply_kb_cleanup_msg_id', '0', "VARCHAR(20)");
+        addFieldToTable($tableName, 'source', null, "VARCHAR(64) NULL");
     }
 } catch (PDOException $e) {
     error_log('[panels] ' . $e->getMessage());
@@ -563,6 +564,7 @@ try {
         statusterffh varchar(200)  NULL,
         volumewarn varchar(200)  NULL,
         inlinebtnmain varchar(200)  NULL,
+        auto_remove_reply_keyboard varchar(20) NULL DEFAULT 'on',
         verifystart varchar(200)  NULL,
         id_support varchar(200)  NULL,
         statusnamecustom varchar(100)  NULL,
@@ -1597,6 +1599,8 @@ try {
         ['tonpay', '💠 تون‌پی'],
         ['cubepay', '🟦 کیوب‌پی'],
         ['blupal', '💙 بلوپال'],
+        ['variza', '💳 واریزا'],
+        ['abangateway', '💳 آبان گیت وی'],
         ['atlaspay', '🌐 اطلس‌پی'],
         ['tetrapay', '🔷 تتراپی'],
         ['textafterpay', $textafterpay],
@@ -2172,26 +2176,34 @@ try {
         ['minbalanceblupal', $main],
         ['maxbalanceblupal', $max],
         ['helpblupal', '2'],
+        ['statusvariza', 'offvariza'],
+        ['apivariza', ''],
+        ['variza_webhook_secret', ''],
+        ['chashbackvariza', '0'],
+        ['minbalancevariza', $main],
+        ['maxbalancevariza', $max],
+        ['helpvariza', '2'],
+        ['statusabangateway', 'offabangateway'],
+        ['urlabangateway', ''],
+        ['apiabangateway', ''],
+        ['chashbackabangateway', '0'],
+        ['minbalanceabangateway', $main],
+        ['maxbalanceabangateway', $max],
+        ['helpabangateway', '2'],
         ['statusatlaspay', 'offatlaspay'],
         ['apiatlaspay', ''],
         ['chashbackatlaspay', '0'],
         ['minbalanceatlaspay', 50000],
         ['maxbalanceatlaspay', 2000000],
         ['helpatlaspay', '2'],
-        ['statustetrapay', 'offtetrapay'],
-        ['apitetrapay', ''],
-        ['apiurltetrapay', ''],
-        ['chashbacktetrapay', '0'],
-        ['minbalancetetrapay', 20000],
-        ['maxbalancetetrapay', 1000000],
-        ['helptetrapay', '2'],
         ['chashbackcart_target', 'all'],
         ['chashbackiranpay2_target', 'all'],
         ['chashbacktonpay_target', 'all'],
         ['chashbackcubepay_target', 'all'],
         ['chashbackblupal_target', 'all'],
+        ['chashbackvariza_target', 'all'],
+        ['chashbackabangateway_target', 'all'],
         ['chashbackatlaspay_target', 'all'],
-        ['chashbacktetrapay_target', 'all'],
         ['chashbackzarinpal_target', 'all'],
         ['chashbackplisio_target', 'all'],
         ['cashbacknowpayment_target', 'all'],
@@ -3292,9 +3304,6 @@ try {
     rxSafeAddColumn($connect, "Payment_report", "atlaspay_order_id",      "VARCHAR(64) NULL");
     rxSafeAddColumn($connect, "Payment_report", "atlaspay_tracking_code", "VARCHAR(64) NULL");
     rxSafeAddColumn($connect, "Payment_report", "atlaspay_payment_url",   "VARCHAR(500) NULL");
-    rxSafeAddColumn($connect, "Payment_report", "tetrapay_token",         "VARCHAR(64) NULL");
-    rxSafeAddColumn($connect, "Payment_report", "tetrapay_tracking_code", "VARCHAR(64) NULL");
-    rxSafeAddColumn($connect, "Payment_report", "tetrapay_payment_link",  "VARCHAR(500) NULL");
 
     try {
         $haveBlupalIdx = $connect->query("SHOW INDEX FROM Payment_report WHERE Key_name = 'idx_pr_blupal_invoice'");
@@ -3307,13 +3316,6 @@ try {
         $haveAtlasIdx = $connect->query("SHOW INDEX FROM Payment_report WHERE Key_name = 'idx_pr_atlaspay_order'");
         if ($haveAtlasIdx && $haveAtlasIdx->num_rows === 0) {
             @$connect->query("ALTER TABLE Payment_report ADD INDEX idx_pr_atlaspay_order (atlaspay_order_id)");
-        }
-    } catch (Throwable $e) {  }
-
-    try {
-        $haveTetraIdx = $connect->query("SHOW INDEX FROM Payment_report WHERE Key_name = 'idx_pr_tetrapay_token'");
-        if ($haveTetraIdx && $haveTetraIdx->num_rows === 0) {
-            @$connect->query("ALTER TABLE Payment_report ADD INDEX idx_pr_tetrapay_token (tetrapay_token)");
         }
     } catch (Throwable $e) {  }
 

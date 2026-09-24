@@ -124,7 +124,7 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
         $stmt->execute();
         $configexits = $stmt->rowCount();
         if (intval($configexits) == 0) {
-            sendmessage($from_id, "❌ موجودی این سرویس به پایان رسیده.", null, 'HTML');
+            sendmessage($from_id, faoxima_textbot_get('dyn_testaccount_manualsale_stock_depleted', "❌ موجودی این سرویس به پایان رسیده."), null, 'HTML');
             return;
         }
     }
@@ -136,7 +136,7 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
     $text = strtolower($text);
     $username_ac = generateUsername($from_id, $marzban_list_get['MethodUsername'], $user['username'], $randomString, $text, $marzban_list_get['namecustom'], $user['namecustom']);
     $username_ac = strtolower($username_ac);
-    $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
+    $DataUserOut = $marzban_list_get['type'] != "Manualsale" ? $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac) : null;
     $random_number = rand(1000000, 9999999);
     if (isset($DataUserOut['username']) || rxTableValueExists('invoice', 'username', $username_ac)) {
         $username_ac = $random_number . "-" . $username_ac;
@@ -1077,7 +1077,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     if ($user['number'] == "none" && (($setting['get_number'] == "onAuthenticationphone") || ($setting['iran_number'] == "onAuthenticationiran")) && !rx_auth_skip_user($user))
         return;
     if (!check_active_btn($setting['keyboardmain'], "text_sell")) {
-        sendmessage($from_id, "❌ این دکمه غیرفعال می باشد", null, 'HTML');
+        sendmessage($from_id, $datatextbot['dyn_errors_button_disabled'] ?? "❌ این دکمه غیرفعال می باشد", null, 'HTML');
         return;
     }
     if ($datain == "buy") {
@@ -1092,7 +1092,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     return;
 } elseif (($text !== '' && $text == $datatextbot['text_sell']) || $datain == "buy" || $datain == "buybacktow" || $datain == "buyback" || $text == "/buy" || $text == "buy" || $user['step'] == "statusnamecustom") {
     if (!check_active_btn($setting['keyboardmain'], "text_sell")) {
-        sendmessage($from_id, "❌ این دکمه غیرفعال می باشد", null, 'HTML');
+        sendmessage($from_id, $datatextbot['dyn_errors_button_disabled'] ?? "❌ این دکمه غیرفعال می باشد", null, 'HTML');
         return;
     }
     $locationproduct = mysqli_query($connect, "SELECT * FROM marzban_panel  WHERE status = 'active'");
@@ -1160,7 +1160,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
                     return;
                 }
                 $textcustom = "📌 حجم درخواستی خود را ارسال کنید.
-🔔قیمت هر گیگ حجم $custompricevalue تومان می باشد.
+🔔قیمت هر گیگ حجم " . rxFormatToman($custompricevalue) . " تومان می باشد.
 🔔 حداقل حجم $mainvolume گیگابایت و حداکثر $maxvolume گیگابایت می باشد.";
                 sendmessage($from_id, $textcustom, $backuser, 'html');
                 step('gettimecustomvol', $from_id);
@@ -1297,7 +1297,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
             return;
         }
         $textcustom = "📌 حجم درخواستی خود را ارسال کنید.
-🔔قیمت هر گیگ حجم $custompricevalue تومان می باشد.
+🔔قیمت هر گیگ حجم " . rxFormatToman($custompricevalue) . " تومان می باشد.
 🔔 حداقل حجم $mainvolume گیگابایت و حداکثر $maxvolume گیگابایت می باشد.";
         sendmessage($from_id, $textcustom, $backuser, 'html');
         step('gettimecustomvol', $from_id);
@@ -1444,7 +1444,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     $maxvolume = json_decode($marzban_list_get['maxvolume'], true);
     $maxvolume = $maxvolume[$user['agent']];
     $textcustom = "📌 حجم درخواستی خود را ارسال کنید.
-🔔قیمت هر گیگ حجم $custompricevalue تومان می باشد.
+🔔قیمت هر گیگ حجم " . rxFormatToman($custompricevalue) . " تومان می باشد.
 🔔 حداقل حجم $mainvolume گیگابایت و حداکثر $maxvolume گیگابایت می باشد.";
     sendmessage($from_id, $textcustom, $backuser, 'html');
     deletemessage($from_id, $message_id);
@@ -1475,7 +1475,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     $customtimevalueprice = $eextraprice[$user['agent']];
     update("user", "Processing_value_one", $text, "id", $from_id);
     $textcustom = "⌛️ زمان سرویس خود را انتخاب نمایید
-📌 تعرفه هر روز  : $customtimevalueprice  تومان
+📌 تعرفه هر روز  : " . rxFormatToman($customtimevalueprice) . "  تومان
 ⚠️ حداقل زمان $maintime روز  و حداکثر $maxtime روز  می توانید تهیه کنید";
     sendmessage($from_id, $textcustom, $backuser, 'html');
     if ($marzban_list_get['MethodUsername'] == $textbotlang['users']['customusername'] || $marzban_list_get['MethodUsername'] == "نام کاربری دلخواه + عدد رندوم" || $marzban_list_get['MethodUsername'] == "متن دلخواه کاربر + رندوم") {
@@ -1608,7 +1608,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     $username_ac = generateUsername($from_id, $marzban_list_get['MethodUsername'], $username, $randomString, $text, $marzban_list_get['namecustom'], $user['namecustom']);
     $username_ac = strtolower($username_ac);
     $requestedUsername_ac = $username_ac;
-    $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
+    $DataUserOut = $marzban_list_get['type'] != "Manualsale" ? $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac) : null;
     $random_number = rand(1000000, 9999999);
     $usernameWasRenamed = isset($DataUserOut['username']) || rxTableValueExists('invoice', 'username', $username_ac);
     if ($usernameWasRenamed) {
@@ -1734,7 +1734,7 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
         $priceproduct = $info_product['price_product'];
     }
     $username_ac = strtolower($user['Processing_value_tow']);
-    $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
+    $DataUserOut = $marzban_list_get['type'] != "Manualsale" ? $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac) : null;
     if (isset($DataUserOut['username']) || rxTableValueExists('invoice', 'username', $username_ac)) {
         sendmessage($from_id, $datatextbot['dyn_errors_restart_buy_process_short'] ?? "❌ لطفا مراحل خرید را مجددا انجام دهید", null, 'HTML');
         return;
@@ -1959,9 +1959,9 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
                 $stmtAffComm1->execute();
                 $result = number_format($result);
                 $dateacc = date('Y/m/d H:i:s');
-                $textadd = "🎁  پرداخت پورسانت
+                $textadd = faoxima_render_text(faoxima_textbot_get('dyn_purchase_affiliate_commission_user_tpl', "🎁  پرداخت پورسانت
 
-        مبلغ $result تومان به حساب شما از طرف  زیر مجموعه تان به کیف پول شما واریز گردید";
+        مبلغ {amount} تومان به حساب شما از طرف  زیر مجموعه تان به کیف پول شما واریز گردید"), ['amount' => $result]);
                 $textreportport = "
 مبلغ $result به کاربر {$user['affiliates']} برای پورسانت از کاربر $from_id واریز گردید
 <blockquote>تایم : $dateacc</blockquote>";
@@ -1992,9 +1992,9 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
             $stmtAffComm2->execute();
             $result = number_format($result);
             $dateacc = date('Y/m/d H:i:s');
-            $textadd = "🎁  پرداخت پورسانت
+            $textadd = faoxima_render_text(faoxima_textbot_get('dyn_purchase_affiliate_commission_user_tpl', "🎁  پرداخت پورسانت
 
-        مبلغ $result تومان به حساب شما از طرف  زیر مجموعه تان به کیف پول شما واریز گردید";
+        مبلغ {amount} تومان به حساب شما از طرف  زیر مجموعه تان به کیف پول شما واریز گردید"), ['amount' => $result]);
             $textreportport = "
 مبلغ $result به کاربر {$user['affiliates']} برای پورسانت از کاربر $from_id واریز گردید
 <blockquote>تایم : $dateacc</blockquote>";
@@ -2018,9 +2018,11 @@ https://t.me/$usernamebot?start={$user['codeInvitation']}";
     $balanceformatsell = number_format(select("user", "Balance", "id", $from_id, "select")['Balance'], 0);
     $textonebuy = "";
     if ($countinvoice == 1) {
-        $textonebuy = "📌 خرید اول کاربر";
+        $textonebuy = faoxima_textbot_get('dyn_purchase_first_buy_flag', "📌 خرید اول کاربر");
     }
     $balanceformatsellbefore = number_format($user['Balance'], 0);
+    $rxFmtInfoProductPrice = rxFormatToman($info_product['price_product']);
+    $rxFmtPriceproduct = rxFormatToman($priceproduct);
     $Response = json_encode([
         'inline_keyboard' => [
             [
@@ -2046,17 +2048,17 @@ $textonebuy
 <blockquote>▫️نوع کاربر : {$user['agent']}</blockquote>
 <blockquote>▫️شماره تلفن کاربر : {$user['number']}</blockquote>
 <blockquote>▫️دسته بندی محصول : {$info_product['category']}</blockquote>
-<blockquote>▫️قیمت محصول : {$info_product['price_product']} تومان</blockquote>
-<blockquote>▫️قیمت نهایی : $priceproduct تومان</blockquote>
+<blockquote>▫️قیمت محصول : {$rxFmtInfoProductPrice} تومان</blockquote>
+<blockquote>▫️قیمت نهایی : {$rxFmtPriceproduct} تومان</blockquote>
 <blockquote>▫️زمان خرید : $timejalali</blockquote>";
     if (strlen($setting['Channel_Report'] ?? '') > 0) {
-        telegram('sendmessage', [
+        rx_sendTopicReport([
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $buyreport,
             'text' => $text_report,
             'parse_mode' => "HTML",
             'reply_markup' => $Response
-        ]);
+        ], ['flow' => 'buy', 'order_id' => (string) ($randomString ?? ''), 'user_id' => (string) $from_id]);
     }
     if (function_exists('faoxima_public_purchase_log_event')) {
         faoxima_public_purchase_log_event('new_sub', [
@@ -2118,7 +2120,7 @@ $textonebuy
     $__dvt = $__dv['value_type'];
     $__dval = (float)$__dv['value'];
     $__dlabel = $__dv['label'];
-    sendmessage($from_id, "🤩 کد تخفیف شما درست بود و تخفیف {$__dlabel} روی فاکتور شما اعمال شد.", null, 'HTML');
+    sendmessage($from_id, sprintf($datatextbot['dyn_errors_discount_applied'] ?? "🤩 کد تخفیف شما درست بود و تخفیف %s روی فاکتور شما اعمال شد.", $__dlabel), null, 'HTML');
     step('payment', $from_id);
     $parts = explode("_", $user['Processing_value_one']);
     $eextraprice = json_decode($marzban_list_get['pricecustomvolume'], true);
@@ -2166,15 +2168,18 @@ $textonebuy
         $info_product['Volume_constraint'] = $textbotlang['users']['stateus']['Unlimited'];
     if ($info_product['price_product'] < 0)
         $info_product['price_product'] = 0;
+    $rxFmtInfoProductmain = rxFormatToman($info_productmain);
+    $rxFmtInfoProductPriceDiscounted = rxFormatToman($info_product['price_product']);
+    $rxFmtUserBalanceInvoicePreview = rxFormatToman($user['Balance']);
     $textin = "
 📇 پیش فاکتور شما:
 👤 نام کاربری: <code>{$user['Processing_value_tow']}</code>
 🔐 نام سرویس: {$info_product['name_product']}
 📆 مدت اعتبار: {$info_product['Service_time']} روز
-💶 قیمت اصلی : <del>$info_productmain تومان</del>
-💶 قیمت با تخفیف: {$info_product['price_product']}  تومان
+💶 قیمت اصلی : <del>{$rxFmtInfoProductmain} تومان</del>
+💶 قیمت با تخفیف: {$rxFmtInfoProductPriceDiscounted}  تومان
 👥 حجم اکانت: {$info_product['Volume_constraint']} گیگ
-💵 موجودی کیف پول شما : {$user['Balance']}
+💵 موجودی کیف پول شما : {$rxFmtUserBalanceInvoicePreview}
 
         💰 سفارش شما آماده پرداخت است.  ";
     $_rx_nav_s = (isset($_rx_nav_styles) && is_array($_rx_nav_styles)) ? $_rx_nav_styles : [];
@@ -2261,7 +2266,7 @@ $textonebuy
     $eextraprice = json_decode($marzban_list_get['pricecustomvolume'], true);
     $custompricevalue = $eextraprice[$user['agent']];
     $textcustom = "🔋 لطفا مقدار حجم سرویس مورد نظر را وارد کنید ( برحسب گیگابایت ) :
-📌 تعرفه هر گیگ :  $custompricevalue
+📌 تعرفه هر گیگ :  " . rxFormatToman($custompricevalue) . "
 🔔 حداقل حجم 1 گیگابایت و حداکثر 1000 گیگابایت می باشد.";
     sendmessage($from_id, $textcustom, $backuser, 'html');
     deletemessage($from_id, $message_id);
@@ -2290,7 +2295,7 @@ $textonebuy
     }
     update("user", "Processing_value_one", $text, "id", $from_id);
     $textcustom = "⌛️ زمان سرویس خود را انتخاب نمایید
-📌 تعرفه هر روز  : $customtimevalueprice  تومان
+📌 تعرفه هر روز  : " . rxFormatToman($customtimevalueprice) . "  تومان
 ⚠️ حداقل زمان $maintime روز  و حداکثر $maxtime روز  می توانید تهیه کنید";
     sendmessage($from_id, $textcustom, $backuser, 'html');
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
@@ -2595,7 +2600,7 @@ $textonebuy
             $__bulkChargedTotal += $__bulkItemCharge;
             continue;
         }
-        $get_username_Check = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_acc);
+        $get_username_Check = $marzban_list_get['type'] != "Manualsale" ? $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_acc) : null;
         if (isset($get_username_Check['username']) || rxTableValueExists('invoice', 'username', $username_acc)) {
             $username_acc = $random_number . "-" . $username_acc;
         }
@@ -2675,6 +2680,7 @@ $textonebuy
     $balanceformatsellbefore = number_format($user['Balance'], 0);
     $pricebulk = $info_product['price_product'] * intval($user['Processing_value_four']);
     $count_service = $user['Processing_value_four'];
+    $rxFmtBulkInfoProductPrice = rxFormatToman($info_product['price_product']);
     $timejalali = jdate('Y/m/d H:i:s');
     $text_report = "📣 جزئیات ساخت اکانت انبوه در ربات شما ثبت شد .
 <blockquote>▫️آیدی عددی کاربر : <code>$from_id</code></blockquote>
@@ -2690,17 +2696,17 @@ $textonebuy
 <blockquote>▫️کد پیگیری: $randomString</blockquote>
 <blockquote>▫️نوع کاربر : {$user['agent']}</blockquote>
 <blockquote>▫️شماره تلفن کاربر : {$user['number']}</blockquote>
-<blockquote>▫️قیمت محصول : {$info_product['price_product']} تومان</blockquote>
-<blockquote>▫️قیمت نهایی : {$info_product['price_product']} تومان</blockquote>
+<blockquote>▫️قیمت محصول : {$rxFmtBulkInfoProductPrice} تومان</blockquote>
+<blockquote>▫️قیمت نهایی : {$rxFmtBulkInfoProductPrice} تومان</blockquote>
 <blockquote>▫️تعداد کانفیگ : {$user['Processing_value_four']} عدد</blockquote>
 <blockquote>▫️زمان خرید : $timejalali</blockquote>";
     if (strlen($setting['Channel_Report'] ?? '') > 0) {
-        telegram('sendmessage', [
+        rx_sendTopicReport([
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $buyreport,
             'text' => $text_report,
             'parse_mode' => "HTML"
-        ]);
+        ], ['flow' => 'bulk_buy', 'order_id' => (string) ($randomString ?? ''), 'user_id' => (string) $from_id]);
     }
     if (function_exists('faoxima_public_purchase_log_event')) {
         faoxima_public_purchase_log_event('new_sub', [
@@ -3411,6 +3417,32 @@ $textonebuy
         }
         $message_id = rx_send_banner_message($from_id, 'cart', $textcart, $sendresidcart, "html");
         updatePaymentMessageId($message_id, $randomString);
+    } elseif (preg_match('/^rxpgw_cancel_(zarinpal|plisio|nowpayment|iranpay2|tonpay|blupal|atlaspay|cubepay|variza|abangateway)_(\w+)$/', (string) $datain, $rxPgwMatch)) {
+        $rxPgwGatewayKey = $rxPgwMatch[1];
+        $rxPgwOrderId = $rxPgwMatch[2];
+        $rxPgwMethodMap = rx_gateway_payment_method_map();
+        $rxPgwMethod = $rxPgwMethodMap[$rxPgwGatewayKey] ?? $rxPgwGatewayKey;
+
+        $rxPgwCancelled = cancelPendingGatewayInvoice($from_id, $rxPgwMethod, $rxPgwOrderId);
+        if (!$rxPgwCancelled) {
+            telegram('answerCallbackQuery', [
+                'callback_query_id' => $callback_query_id,
+                'text' => '❌ این فاکتور دیگر قابل لغو نیست.',
+                'show_alert' => true,
+                'cache_time' => 0,
+            ]);
+            return;
+        }
+
+        $rxPgwLabel = rx_gateway_display_name($rxPgwGatewayKey);
+        $rxPgwText = "✅ فاکتور قبلی لغو شد.\n\nبرای دریافت فاکتور جدید، دکمه زیر را بزنید.";
+        $rxPgwKb = json_encode([
+            'inline_keyboard' => [
+                [['text' => "🔄 دریافت فاکتور جدید {$rxPgwLabel}", 'callback_data' => $rxPgwGatewayKey]],
+                [['text' => "🔙 بازگشت به منوی اصلی", 'callback_data' => 'backuser']],
+            ],
+        ], JSON_UNESCAPED_UNICODE);
+        Editmessagetext($from_id, $message_id, $rxPgwText, $rxPgwKb, 'HTML');
     } elseif ($datain == "zarinpal") {
         if ($user['Processing_value'] < 5000) {
             sendmessage($from_id, $textbotlang['users']['Balance']['zarinpal'], null, 'HTML');
@@ -3422,6 +3454,11 @@ $textonebuy
             $mainbalance = number_format($mainbalance);
             $maxbalance = number_format($maxbalance);
             sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalance, $maxbalance), null, 'HTML');
+            return;
+        }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'zarinpal');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'zarinpal');
             return;
         }
         deletemessage($from_id, $message_id);
@@ -3512,6 +3549,11 @@ $textonebuy
             $mainbalanceplisio = number_format($mainbalanceplisio);
             $maxbalanceplisio = number_format($maxbalanceplisio);
             sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalanceplisio, $maxbalanceplisio), null, 'HTML');
+            return;
+        }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'plisio');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'plisio');
             return;
         }
         deletemessage($from_id, $message_id);
@@ -3611,6 +3653,11 @@ $textonebuy
             sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalanceplisio, $maxbalanceplisio), null, 'HTML');
             return;
         }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'nowpayment');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'nowpayment');
+            return;
+        }
         deletemessage($from_id, $message_id);
         sendmessage($from_id, $textbotlang['users']['Balance']['linkpayments'], $keyboard, 'HTML');
         $dateacc = date('Y/m/d H:i:s');
@@ -3693,6 +3740,11 @@ $textonebuy
             $mainbalanceplisio = number_format($mainbalanceplisio);
             $maxbalanceplisio = number_format($maxbalanceplisio);
             sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalanceplisio, $maxbalanceplisio), null, 'HTML');
+            return;
+        }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'Currency Rial 2');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'iranpay2');
             return;
         }
         deletemessage($from_id, $message_id);
@@ -3828,6 +3880,11 @@ $textonebuy
             sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalancetonpay, $maxbalancetonpay), null, 'HTML');
             return;
         }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'tonpay');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'tonpay');
+            return;
+        }
         deletemessage($from_id, $message_id);
         sendmessage($from_id, $textbotlang['users']['Balance']['linkpayments'], $keyboard, 'HTML');
         $dateacc = date('Y/m/d H:i:s');
@@ -3923,7 +3980,7 @@ $textonebuy
 
 💢 لطفا به این نکات قبل از پرداخت توجه کنید 👇
 
-🔹 تراکنش تا ۳۰ دقیقه اعتبار و پس از آن در صورت پرداخت تایید نخواهد شد .
+🔹 تراکنش تا ۲۴ ساعت اعتبار و پس از آن در صورت پرداخت تایید نخواهد شد .
 
 ✅ در صورت مشکل میتوانید با پشتیبانی در ارتباط باشید";
         $gethelp = select("PaySetting", "ValuePay", "NamePay", "helptonpay", "select")['ValuePay'];
@@ -3946,6 +4003,11 @@ $textonebuy
             $mainbalanceblupal = number_format($mainbalanceblupal);
             $maxbalanceblupal = number_format($maxbalanceblupal);
             sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalanceblupal, $maxbalanceblupal), null, 'HTML');
+            return;
+        }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'blupal');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'blupal');
             return;
         }
         deletemessage($from_id, $message_id);
@@ -4068,6 +4130,11 @@ $textonebuy
             sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalanceatlaspay, $maxbalanceatlaspay), null, 'HTML');
             return;
         }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'atlaspay');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'atlaspay');
+            return;
+        }
         deletemessage($from_id, $message_id);
         sendmessage($from_id, $textbotlang['users']['Balance']['linkpayments'], $keyboard, 'HTML');
         $dateacc = date('Y/m/d H:i:s');
@@ -4183,130 +4250,6 @@ $textonebuy
         }
         $message_id = sendmessage($from_id, $textnowpayments, $paymentkeyboard, 'HTML');
         updatePaymentMessageId($message_id, $randomString);
-    } elseif ($datain == "tetrapay") {
-        $mainbalancetetrapay = select("PaySetting", "ValuePay", "NamePay", "minbalancetetrapay", "select")['ValuePay'];
-        $maxbalancetetrapay = select("PaySetting", "ValuePay", "NamePay", "maxbalancetetrapay", "select")['ValuePay'];
-        if ($user['Processing_value'] < $mainbalancetetrapay || $user['Processing_value'] > $maxbalancetetrapay) {
-            $mainbalancetetrapay = number_format($mainbalancetetrapay);
-            $maxbalancetetrapay = number_format($maxbalancetetrapay);
-            sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalancetetrapay, $maxbalancetetrapay), null, 'HTML');
-            return;
-        }
-        deletemessage($from_id, $message_id);
-        sendmessage($from_id, $textbotlang['users']['Balance']['linkpayments'], $keyboard, 'HTML');
-        $dateacc = date('Y/m/d H:i:s');
-        $randomString = bin2hex(random_bytes(5));
-        $invoice = "{$user['Processing_value_tow']}|{$user['Processing_value_one']}";
-        $stmt = $connect->prepare("INSERT INTO Payment_report (id_user,id_order,time,price,payment_Status,Payment_Method,id_invoice) VALUES (?,?,?,?,?,?,?)");
-        $payment_Status = "Unpaid";
-        $Payment_Method = "tetrapay";
-        $stmt->bind_param("sssssss", $from_id, $randomString, $dateacc, $user['Processing_value'], $payment_Status, $Payment_Method, $invoice);
-        $stmt->execute();
-        $payment = tetrapayCreatePaymentLink((int) $user['Processing_value']);
-
-        $paymentErrorData = null;
-        if (!is_array($payment)) {
-            $paymentErrorData = ['error' => 'پاسخ نامعتبر از سرویس تتراپی'];
-        } elseif (empty($payment['ok'])) {
-            $paymentErrorData = $payment;
-        }
-
-        if ($paymentErrorData !== null) {
-            $errorLines = [];
-            if (isset($paymentErrorData['error'])) {
-                $errorLines[] = "پیام خطا: " . $paymentErrorData['error'];
-            }
-            if (empty($errorLines)) {
-                $errorLines[] = json_encode($paymentErrorData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            }
-
-            $text_error = implode("\n", $errorLines);
-            update("Payment_report", "payment_Status", "reject", "id_order", $randomString);
-            update("Payment_report", "dec_not_confirmed", $text_error, "id_order", $randomString);
-            $safeErrorText = htmlspecialchars($text_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            sendmessage($from_id, $textbotlang['users']['Balance']['errorLinkPayment'], $keyboard, 'HTML');
-            step('home', $from_id);
-            $ErrorsLinkPayment = "
-                        ⭕️ یک کاربر قصد پرداخت داشت که ساخت لینک پرداخت  با خطا مواجه شده و به کاربر لینک داده نشد
-<blockquote>✍️ دلیل خطا : <pre>$safeErrorText</pre></blockquote>
-
-<blockquote>آیدی کابر : $from_id</blockquote>
-<blockquote>روش پرداخت : $Payment_Method</blockquote>
-<blockquote>نام کاربری کاربر : @$username</blockquote>";
-            if (strlen($setting['Channel_Report'] ?? '') > 0) {
-                telegram('sendmessage', [
-                    'chat_id' => $setting['Channel_Report'],
-                    'message_thread_id' => $errorreport,
-                    'text' => $ErrorsLinkPayment,
-                    'parse_mode' => "HTML"
-                ]);
-            }
-            return;
-        }
-
-        $tetrapayToken = trim((string) ($payment['token'] ?? ''));
-        $paymentLink = trim((string) ($payment['link'] ?? ''));
-        $trackingCode = trim((string) ($payment['tracking_code'] ?? ''));
-        if ($tetrapayToken === '' || $paymentLink === '') {
-            $text_error = json_encode($payment, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            update("Payment_report", "payment_Status", "reject", "id_order", $randomString);
-            update("Payment_report", "dec_not_confirmed", $text_error, "id_order", $randomString);
-            $safeErrorText = htmlspecialchars($text_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            sendmessage($from_id, $textbotlang['users']['Balance']['errorLinkPayment'], $keyboard, 'HTML');
-            step('home', $from_id);
-            $ErrorsLinkPayment = "
-                        ⭕️ یک کاربر قصد پرداخت داشت که ساخت لینک پرداخت  با خطا مواجه شده و به کاربر لینک داده نشد
-<blockquote>✍️ دلیل خطا : <pre>$safeErrorText</pre></blockquote>
-
-<blockquote>آیدی کابر : $from_id</blockquote>
-<blockquote>روش پرداخت : $Payment_Method</blockquote>
-<blockquote>نام کاربری کاربر : @$username</blockquote>";
-            if (strlen($setting['Channel_Report'] ?? '') > 0) {
-                telegram('sendmessage', [
-                    'chat_id' => $setting['Channel_Report'],
-                    'message_thread_id' => $errorreport,
-                    'text' => $ErrorsLinkPayment,
-                    'parse_mode' => "HTML"
-                ]);
-            }
-            return;
-        }
-        $totalAmountToman = isset($payment['total_amount']) ? (int) $payment['total_amount'] : (int) $user['Processing_value'];
-        update("Payment_report", "tetrapay_token", $tetrapayToken, "id_order", $randomString);
-        update("Payment_report", "tetrapay_tracking_code", $trackingCode, "id_order", $randomString);
-        update("Payment_report", "tetrapay_payment_link", $paymentLink, "id_order", $randomString);
-        update("Payment_report", "price", $totalAmountToman, "id_order", $randomString);
-        $paymentkeyboard = json_encode([
-            'inline_keyboard' => [
-                [
-                    ['text' => $textbotlang['users']['Balance']['payments'], 'url' => $paymentLink]
-                ]
-            ]
-        ]);
-        $pricetoman = number_format($totalAmountToman, 0);
-        $textnowpayments = "✅ تراکنش شما ایجاد شد
-
-🛒 کد پیگیری:  <code>" . ($trackingCode !== '' ? $trackingCode : $randomString) . "</code>
-💲 مبلغ تراکنش به تومان  : <code>$pricetoman</code>
-
-💢 لطفا به این نکات قبل از پرداخت توجه کنید 👇
-
-🔹 تراکنش تا ۱۰ دقیقه اعتبار و پس از آن در صورت پرداخت تایید نخواهد شد .
-
-✅ در صورت مشکل میتوانید با پشتیبانی در ارتباط باشید";
-        $gethelp = select("PaySetting", "ValuePay", "NamePay", "helptetrapay", "select")['ValuePay'];
-        if ($gethelp != 2) {
-            $data = json_decode($gethelp, true);
-            if ($data['type'] == "text") {
-                sendmessage($from_id, $data['text'], null, 'HTML');
-            } elseif ($data['type'] == "photo") {
-                sendphoto($from_id, $data['photoid'], null);
-            } elseif ($data['type'] == "video") {
-                sendvideo($from_id, $data['videoid'], null);
-            }
-        }
-        $message_id = sendmessage($from_id, $textnowpayments, $paymentkeyboard, 'HTML');
-        updatePaymentMessageId($message_id, $randomString);
     } elseif ($datain == "cubepay") {
         $mainbalancecubepay = select("PaySetting", "ValuePay", "NamePay", "minbalancecubepay", "select")['ValuePay'];
         $maxbalancecubepay = select("PaySetting", "ValuePay", "NamePay", "maxbalancecubepay", "select")['ValuePay'];
@@ -4314,6 +4257,11 @@ $textonebuy
             $mainbalancecubepay = number_format($mainbalancecubepay);
             $maxbalancecubepay = number_format($maxbalancecubepay);
             sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalancecubepay, $maxbalancecubepay), null, 'HTML');
+            return;
+        }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'cubepay');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'cubepay');
             return;
         }
         deletemessage($from_id, $message_id);
@@ -4445,6 +4393,221 @@ $textonebuy
                 . "⚠️ مبلغ باید رقم‌به‌رقم دقیق باشد — تاییدِ خودکار فقط با همین عدد انجام می‌شود.";
             sendmessage($from_id, $cubepayCardText, null, 'HTML');
         }
+    } elseif ($datain == "variza") {
+        $mainbalancevariza = select("PaySetting", "ValuePay", "NamePay", "minbalancevariza", "select")['ValuePay'];
+        $maxbalancevariza = select("PaySetting", "ValuePay", "NamePay", "maxbalancevariza", "select")['ValuePay'];
+        if ($user['Processing_value'] < $mainbalancevariza || $user['Processing_value'] > $maxbalancevariza) {
+            $mainbalancevariza = number_format($mainbalancevariza);
+            $maxbalancevariza = number_format($maxbalancevariza);
+            sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalancevariza, $maxbalancevariza), null, 'HTML');
+            return;
+        }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'variza');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'variza');
+            return;
+        }
+        deletemessage($from_id, $message_id);
+        sendmessage($from_id, $textbotlang['users']['Balance']['linkpayments'], $keyboard, 'HTML');
+        $dateacc = date('Y/m/d H:i:s');
+        $randomString = bin2hex(random_bytes(5));
+        $invoice = "{$user['Processing_value_tow']}|{$user['Processing_value_one']}";
+        $stmt = $connect->prepare("INSERT INTO Payment_report (id_user,id_order,time,price,payment_Status,Payment_Method,id_invoice) VALUES (?,?,?,?,?,?,?)");
+        $payment_Status = "Unpaid";
+        $Payment_Method = "variza";
+        $stmt->bind_param("sssssss", $from_id, $randomString, $dateacc, $user['Processing_value'], $payment_Status, $Payment_Method, $invoice);
+        $stmt->execute();
+        $payment = varizaCreatePayment($randomString, (int) $user['Processing_value']);
+
+        $paymentErrorData = null;
+        if (!is_array($payment)) {
+            $paymentErrorData = ['message' => 'پاسخ نامعتبر از سرویس واریزا'];
+        } elseif (empty($payment['success'])) {
+            $paymentErrorData = $payment;
+        }
+
+        if ($paymentErrorData !== null) {
+            $errorLines = [];
+            if (isset($paymentErrorData['message'])) {
+                $errorLines[] = "پیام خطا: " . $paymentErrorData['message'];
+            }
+            if (empty($errorLines)) {
+                $errorLines[] = json_encode($paymentErrorData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+
+            $text_error = implode("\n", $errorLines);
+            update("Payment_report", "payment_Status", "reject", "id_order", $randomString);
+            update("Payment_report", "dec_not_confirmed", $text_error, "id_order", $randomString);
+            $safeErrorText = htmlspecialchars($text_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            sendmessage($from_id, $textbotlang['users']['Balance']['errorLinkPayment'], $keyboard, 'HTML');
+            step('home', $from_id);
+            $ErrorsLinkPayment = "
+                        ⭕️ یک کاربر قصد پرداخت داشت که ساخت لینک پرداخت  با خطا مواجه شده و به کاربر لینک داده نشد
+<blockquote>✍️ دلیل خطا : <pre>$safeErrorText</pre></blockquote>
+
+<blockquote>آیدی کابر : $from_id</blockquote>
+<blockquote>روش پرداخت : $Payment_Method</blockquote>
+<blockquote>نام کاربری کاربر : @$username</blockquote>";
+            if (strlen($setting['Channel_Report'] ?? '') > 0) {
+                telegram('sendmessage', [
+                    'chat_id' => $setting['Channel_Report'],
+                    'message_thread_id' => $errorreport,
+                    'text' => $ErrorsLinkPayment,
+                    'parse_mode' => "HTML"
+                ]);
+            }
+            return;
+        }
+
+        $slug = trim((string) ($payment['slug'] ?? ''));
+        $paymentLink = trim((string) ($payment['pay_url'] ?? ''));
+        if ($paymentLink === '') {
+            $text_error = json_encode($payment, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            update("Payment_report", "payment_Status", "reject", "id_order", $randomString);
+            update("Payment_report", "dec_not_confirmed", $text_error, "id_order", $randomString);
+            $safeErrorText = htmlspecialchars($text_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            sendmessage($from_id, $textbotlang['users']['Balance']['errorLinkPayment'], $keyboard, 'HTML');
+            step('home', $from_id);
+            $ErrorsLinkPayment = "
+                        ⭕️ یک کاربر قصد پرداخت داشت که ساخت لینک پرداخت  با خطا مواجه شده و به کاربر لینک داده نشد
+<blockquote>✍️ دلیل خطا : <pre>$safeErrorText</pre></blockquote>
+
+<blockquote>آیدی کابر : $from_id</blockquote>
+<blockquote>روش پرداخت : $Payment_Method</blockquote>
+<blockquote>نام کاربری کاربر : @$username</blockquote>";
+            if (strlen($setting['Channel_Report'] ?? '') > 0) {
+                telegram('sendmessage', [
+                    'chat_id' => $setting['Channel_Report'],
+                    'message_thread_id' => $errorreport,
+                    'text' => $ErrorsLinkPayment,
+                    'parse_mode' => "HTML"
+                ]);
+            }
+            return;
+        }
+        update("Payment_report", "dec_not_confirmed", $slug, "id_order", $randomString);
+        $paymentkeyboard = json_encode([
+            'inline_keyboard' => [
+                [
+                    ['text' => $textbotlang['users']['Balance']['payments'], 'url' => $paymentLink]
+                ]
+            ]
+        ]);
+        $pricetoman = number_format($user['Processing_value'], 0);
+        $textnowpayments = "✅ تراکنش شما ایجاد شد
+
+🛒 کد پیگیری:  <code>$randomString</code>
+💲 مبلغ تراکنش به تومان  : <code>$pricetoman</code>
+
+💢 لطفا به این نکات قبل از پرداخت توجه کنید 👇
+
+🔹 تراکنش تا ۳۰ دقیقه اعتبار و پس از آن در صورت پرداخت تایید نخواهد شد .
+
+✅ در صورت مشکل میتوانید با پشتیبانی در ارتباط باشید";
+        $gethelp = select("PaySetting", "ValuePay", "NamePay", "helpvariza", "select")['ValuePay'];
+        if ($gethelp != 2) {
+            $data = json_decode($gethelp, true);
+            if ($data['type'] == "text") {
+                sendmessage($from_id, $data['text'], null, 'HTML');
+            } elseif ($data['type'] == "photo") {
+                sendphoto($from_id, $data['photoid'], null);
+            } elseif ($data['type'] == "video") {
+                sendvideo($from_id, $data['videoid'], null);
+            }
+        }
+        $message_id = sendmessage($from_id, $textnowpayments, $paymentkeyboard, 'HTML');
+        updatePaymentMessageId($message_id, $randomString);
+    } elseif ($datain == "abangateway") {
+        $mainbalanceabangateway = select("PaySetting", "ValuePay", "NamePay", "minbalanceabangateway", "select")['ValuePay'];
+        $maxbalanceabangateway = select("PaySetting", "ValuePay", "NamePay", "maxbalanceabangateway", "select")['ValuePay'];
+        if ($user['Processing_value'] < $mainbalanceabangateway || $user['Processing_value'] > $maxbalanceabangateway) {
+            $mainbalanceabangateway = number_format($mainbalanceabangateway);
+            $maxbalanceabangateway = number_format($maxbalanceabangateway);
+            sendmessage($from_id, sprintf($datatextbot['dyn_errors_min_max_deposit_amount'] ?? "❌ حداقل مبلغ واریزی این روش پرداخت باید %s و حداکثر %s تومان باشد", $mainbalanceabangateway, $maxbalanceabangateway), null, 'HTML');
+            return;
+        }
+        $rxPendingGw = findPendingGatewayInvoice($from_id, 'abangateway');
+        if ($rxPendingGw !== null) {
+            rx_send_pending_gateway_invoice_notice($from_id, $message_id, $rxPendingGw, 'abangateway');
+            return;
+        }
+        deletemessage($from_id, $message_id);
+        sendmessage($from_id, $textbotlang['users']['Balance']['linkpayments'], $keyboard, 'HTML');
+        $dateacc = date('Y/m/d H:i:s');
+        $randomString = bin2hex(random_bytes(5));
+        $invoice = "{$user['Processing_value_tow']}|{$user['Processing_value_one']}";
+        $stmt = $connect->prepare("INSERT INTO Payment_report (id_user,id_order,time,price,payment_Status,Payment_Method,id_invoice) VALUES (?,?,?,?,?,?,?)");
+        $payment_Status = "Unpaid";
+        $Payment_Method = "abangateway";
+        $stmt->bind_param("sssssss", $from_id, $randomString, $dateacc, $user['Processing_value'], $payment_Status, $Payment_Method, $invoice);
+        $stmt->execute();
+        $payment = abangatewayCreatePayment($randomString, (int) $user['Processing_value'], $from_id);
+
+        // abangatewayCreatePayment() only reports success with an authority and
+        // an https link in hand, so one refusal path covers every failure.
+        if (!is_array($payment) || empty($payment['success'])) {
+            $text_error = "پیام خطا: " . (is_array($payment) && !empty($payment['message']) ? $payment['message'] : 'پاسخ نامعتبر از آبان گیت وی');
+            update("Payment_report", "payment_Status", "reject", "id_order", $randomString);
+            update("Payment_report", "dec_not_confirmed", $text_error, "id_order", $randomString);
+            $safeErrorText = htmlspecialchars($text_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            sendmessage($from_id, $textbotlang['users']['Balance']['errorLinkPayment'], $keyboard, 'HTML');
+            step('home', $from_id);
+            $ErrorsLinkPayment = "
+                        ⭕️ یک کاربر قصد پرداخت داشت که ساخت لینک پرداخت  با خطا مواجه شده و به کاربر لینک داده نشد
+<blockquote>✍️ دلیل خطا : <pre>$safeErrorText</pre></blockquote>
+
+<blockquote>آیدی کابر : $from_id</blockquote>
+<blockquote>روش پرداخت : $Payment_Method</blockquote>
+<blockquote>نام کاربری کاربر : @$username</blockquote>";
+            if (strlen($setting['Channel_Report'] ?? '') > 0) {
+                telegram('sendmessage', [
+                    'chat_id' => $setting['Channel_Report'],
+                    'message_thread_id' => $errorreport,
+                    'text' => $ErrorsLinkPayment,
+                    'parse_mode' => "HTML"
+                ]);
+            }
+            return;
+        }
+
+        // The callback looks the order up by id and reads the authority from
+        // here, the way the other gateways keep their invoice handle.
+        update("Payment_report", "dec_not_confirmed", $payment['authority'], "id_order", $randomString);
+        $paymentkeyboard = json_encode([
+            'inline_keyboard' => [
+                [
+                    ['text' => $textbotlang['users']['Balance']['payments'], 'url' => $payment['pay_url']]
+                ]
+            ]
+        ]);
+        $pricetoman = number_format($user['Processing_value'], 0);
+        $textabangatewaypay = "✅ تراکنش شما ایجاد شد
+
+🛒 کد پیگیری:  <code>$randomString</code>
+💲 مبلغ تراکنش به تومان  : <code>$pricetoman</code>
+
+💢 لطفا به این نکات قبل از پرداخت توجه کنید 👇
+
+🔹 صفحه پرداخت شماره کارت و <b>مبلغ دقیق</b> را نشان میدهد. همان عدد را، رقم به رقم، کارت به کارت کنید؛ تایید خودکار با همان عدد انجام میشود.
+🔹 مهلت پرداخت روی همان صفحه نمایش داده میشود.
+🔹 بعد از واریز لازم نیست رسید بفرستید؛ تایید خودکار است و نتیجه همین جا به شما اطلاع داده میشود.
+
+✅ در صورت مشکل میتوانید با پشتیبانی در ارتباط باشید";
+        $gethelp = select("PaySetting", "ValuePay", "NamePay", "helpabangateway", "select")['ValuePay'];
+        if ($gethelp != 2) {
+            $data = json_decode((string) $gethelp, true);
+            if (is_array($data)) {
+                if (($data['type'] ?? '') == "text") {
+                    sendmessage($from_id, $data['text'], null, 'HTML');
+                } elseif (($data['type'] ?? '') == "photo") {
+                    sendphoto($from_id, $data['photoid'], null);
+                } elseif (($data['type'] ?? '') == "video") {
+                    sendvideo($from_id, $data['videoid'], null);
+                }
+            }
+        }
+        $message_id = sendmessage($from_id, $textabangatewaypay, $paymentkeyboard, 'HTML');
+        updatePaymentMessageId($message_id, $randomString);
     } elseif ($datain == "digitaltron") {
 
         $mainbalancedigitaltron = select("PaySetting", "ValuePay", "NamePay", "minbalancedigitaltron", "select")['ValuePay'];

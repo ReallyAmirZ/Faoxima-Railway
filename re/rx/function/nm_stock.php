@@ -405,7 +405,7 @@ function nmMaybeHandleStockCallback($datain,$chatId,$messageId=null,$callbackQue
         if((float)($userRow['Balance']??0)<$price && ($userRow['agent']??'')!=='n2'){ sendmessage($chatId,'❌ موجودی کیف پول برای تمدید کافی نیست.',$keyboard??null,'HTML'); return true; }
         if(nmPanelNationalEnabled($panel)){
             $stockNew=nmStockReserveForProduct($panel,$product,$chatId,$invoice['id_invoice'],'stock_service_extend');
-            if(!$stockNew){ sendmessage($chatId,'❌ موجودی انبار برای این محصول تمام شده است. مبلغی کسر نشد.',$keyboard??null,'HTML'); return true; }
+            if(!$stockNew){ sendmessage($chatId,faoxima_textbot_get('dyn_errors_stock_depleted_no_charge','❌ موجودی انبار برای این محصول تمام شده است. مبلغی کسر نشد.'),$keyboard??null,'HTML'); return true; }
             if (function_exists('balance_atomic_charge')) {
                 $__allowNegRb=(($userRow['agent']??'')==='n2')?(int)($userRow['maxbuyagent']??0):0;
                 $__chargeRb=balance_atomic_charge($chatId,(float)$price,$__allowNegRb);
@@ -425,7 +425,7 @@ function nmMaybeHandleStockCallback($datain,$chatId,$messageId=null,$callbackQue
             try{ update('invoice','source_panel_code',$panel['code_panel']??'','id_invoice',$invoice['id_invoice']); }catch(Throwable $e){}
             $invoiceNew=array_merge($invoice,['name_product'=>$product['name_product'],'price_product'=>$product['price_product'],'Volume'=>$product['Volume_constraint'],'Service_time'=>$product['Service_time'],'time_sell'=>time(),'user_info'=>$stockNew['content'],'source_panel_code'=>$panel['code_panel']??'']);
             nmStockDeliverConfig($stockNew,$invoiceNew,'✅ تمدید سرویس از انبار شبکه‌ملی با موفقیت انجام شد');
-            sendmessage($chatId,'✅ تمدید انباری انجام شد و موجودی انبار یک عدد کم شد.',$keyboard??null,'HTML');
+            sendmessage($chatId,faoxima_textbot_get('dyn_errors_stock_extend_success','✅ تمدید انباری انجام شد و موجودی انبار یک عدد کم شد.'),$keyboard??null,'HTML');
 
             if(function_exists('nmStockNotifyExtend')) nmStockNotifyExtend($chatId,$userRow,$invoice,$product,$panel,'stock',(string)($invoice['username']??''),$price);
         }else{
@@ -477,15 +477,6 @@ function nmStockFallbackForInvoice(array $invoice, array $product = null, $mode 
     nmStockDeliverConfig($stock, $invoice, $mode === 'config_button' ? '✅ کانفیگ مطابق حجم سرویس از انبار شبکه‌ملی تحویل شد' : '✅ تمدید از پنل انجام نشد؛ کانفیگ جایگزین از انبار شبکه‌ملی تحویل شد');
     try { update('invoice', 'Status', 'active', 'id_invoice', $invoice['id_invoice']); update('invoice', 'user_info', $stock['content'], 'id_invoice', $invoice['id_invoice']); } catch (Throwable $e) { error_log('nmStockFallbackForInvoice invoice update failed: ' . $e->getMessage()); }
     return $stock;
-}
-
-function nmStockStatusText($panelCode = null)
-{
-    $rows = nmStockCounts($panelCode);
-    if (!$rows) return "📦 انبار شبکه‌ملی\n\n❌ موجودی فعالی ثبت نشده است.";
-    $lines = ["📦 وضعیت موجودی انبار شبکه‌ملی", "", "سطح / فرمت / تعداد:"];
-    foreach ($rows as $row) $lines[] = "• {$row['tier']} / {$row['format']} : {$row['cnt']} عدد";
-    return implode("\n", $lines);
 }
 
 function nmStockCompleteExtendFallback($userId, array $userRow, array $invoice, array $product, $priceToCharge = 0, $mode = 'extend_fallback')

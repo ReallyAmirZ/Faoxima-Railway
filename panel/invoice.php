@@ -59,6 +59,16 @@ if ($df['active']) {
 }
 $whereSql .= fx_status_filter_sql('Status', $invStatus, $invStatusOptions, $whereParams, ':statusVal');
 
+$invStatusActive = $invStatus !== '' && isset($invStatusOptions[$invStatus]);
+$invFilterActive = $invQ !== '' || $df['active'] || $invStatusActive;
+$invDateKeep = fx_filter_delete_date_params('', $df['active']);
+$invFilterParams = array_merge(['q' => $invQ !== '' ? $invQ : null, 'status' => $invStatusActive ? $invStatus : null], $invDateKeep);
+$invFilterCriteria = fx_filter_delete_criteria($invStatusActive ? $invStatusOptions[$invStatus] : '', $df, $invQ);
+if (fx_filter_delete_requested()) {
+    [$fdMatched, $fdDeleted] = $invFilterActive ? fx_filter_delete_where($pdo, 'invoice', $whereSql, $whereParams) : [0, 0];
+    fx_filter_delete_redirect('invoice.php', $invFilterParams, $fdMatched, $fdDeleted);
+}
+
 $pg = fx_paginate($pdo, "SELECT COUNT(*) FROM invoice WHERE $whereSql", $whereParams, 5);
 
 $query = $pdo->prepare("SELECT * FROM invoice WHERE $whereSql ORDER BY id_invoice DESC LIMIT :perPage OFFSET :offset");
@@ -74,8 +84,8 @@ $listinvoice = $query->fetchAll();
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>مدیریت سفارشات | ربات فاکسیما</title>
-    <link rel="stylesheet" href="css/theme.css?v=flat47">
-<script src="js/theme.js?v=flat5" defer>
+    <link rel="stylesheet" href="css/theme.css?v=flat50">
+<script src="js/theme.js?v=flat50" defer>
 
 </script>
 </head>
@@ -85,7 +95,7 @@ $listinvoice = $query->fetchAll();
     <?php include("header.php"); ?>
 
     <section id="main-content">
-        <div class="wrapper">
+        <div class="wrapper fx-page-list">
 
             <div class="page-head">
                 <div>
@@ -99,11 +109,14 @@ $listinvoice = $query->fetchAll();
 
             <?php echo fx_bulk_delete_flash_html(); ?>
 
-            <?php echo fx_search_ui('invoice.php', $invQ, ['status' => $invStatus !== '' ? $invStatus : null], 'جستجو در شناسه سفارش، آیدی کاربر، نام کانفیگ یا محصول…'); ?>
+            <?php echo fx_filter_delete_flash_html(); ?>
 
-            <?php echo fx_status_filter_ui('invoice.php', $invStatusOptions, $invStatus, ['q' => $invQ !== '' ? $invQ : null]); ?>
+            <?php echo fx_search_ui('invoice.php', $invQ, array_merge(['status' => $invStatus !== '' ? $invStatus : null], $invDateKeep), 'جستجو در شناسه سفارش، آیدی کاربر، نام کانفیگ یا محصول…'); ?>
 
-            <?php echo fx_date_filter_ui('invoice.php', '', ['q' => $invQ !== '' ? $invQ : null, 'status' => $invStatus !== '' ? $invStatus : null]); ?>
+            <?php echo fx_status_filter_ui('invoice.php', $invStatusOptions, $invStatus, array_merge(['q' => $invQ !== '' ? $invQ : null], $invDateKeep)); ?>
+
+            <?php $fxFd = fx_filter_delete_parts('invoice.php', $invFilterParams, $invFilterActive ? (int)$pg['total'] : 0, $invFilterCriteria); ?>
+            <?php echo fx_date_filter_ui('invoice.php', '', ['q' => $invQ !== '' ? $invQ : null, 'status' => $invStatus !== '' ? $invStatus : null], '', $fxFd['button'], $fxFd['form']); ?>
 
             <div class="card">
                 <form method="POST" action="invoice.php" id="bulk-form">

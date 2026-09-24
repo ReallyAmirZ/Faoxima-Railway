@@ -79,7 +79,7 @@ function tonpay_process_webhook()
         http_response_code(404);
         exit('Order not found');
     }
-    if ($Payment_report['payment_Status'] == "expire") {
+    if ($Payment_report['payment_Status'] == "expire" || $Payment_report['payment_Status'] == "cancelled") {
         return;
     }
 
@@ -129,7 +129,7 @@ function tonpay_process_webhook()
     $creditAmount = $finalAmount;
 
     $atomic = $connect->prepare(
-        "UPDATE Payment_report SET payment_Status = ? WHERE id_order = ? AND payment_Status <> 'paid'"
+        "UPDATE Payment_report SET payment_Status = ? WHERE id_order = ? AND payment_Status NOT IN ('paid', 'cancelled')"
     );
     $statusPaid = 'paid';
     $atomic->bind_param('ss', $statusPaid, $orderId);
@@ -164,7 +164,7 @@ function tonpay_process_webhook()
         'text_wgdashboard' => ''
     );
     foreach ($datatxtbot as $item) {
-        if (isset($datatextbot[$item['id_text']])) {
+        if (array_key_exists($item['id_text'], $datatextbot) || (is_string($item['text']) && trim($item['text']) !== '')) {
             $datatextbot[$item['id_text']] = $item['text'];
         }
     }
@@ -192,7 +192,7 @@ function tonpay_process_webhook()
         $Balance_confrim = intval($Balance_id['Balance']) + $result;
         update("user", "Balance", $Balance_confrim, "id", $Balance_id['id']);
         $pricecashback = number_format($pricecashback);
-        $text_report = "🎁 کاربر عزیز مبلغ $result تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
+        $text_report = "🎁 کاربر عزیز مبلغ " . rxFormatToman($result) . " تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
         sendmessage($Balance_id['id'], $text_report, null, 'HTML');
     }
 
@@ -200,11 +200,13 @@ function tonpay_process_webhook()
     $usernameEsc = htmlspecialchars((string) $Balance_id['username'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $userIdEsc = htmlspecialchars((string) $Balance_id['id'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $rlm = "\xE2\x80\x8F";
+    $rxFmtPrice = rxFormatToman($price);
+    $rxFmtCreditAmount = rxFormatToman($creditAmount);
     $text_reportpayment = "💵 پرداخت جدید
 <blockquote>- 👤 نام کاربری کاربر : @{$usernameEsc}</blockquote>
 <blockquote>- 👤 آیدی عددی کاربر : {$rlm}<code>{$userIdEsc}</code></blockquote>
-<blockquote>- 💰 مبلغ اعتباردهی : $price تومان</blockquote>
-<blockquote>- 💸 مبلغ نهایی تأییدشده توسط تون‌پی : $creditAmount تومان</blockquote>
+<blockquote>- 💰 مبلغ اعتباردهی : {$rxFmtPrice} تومان</blockquote>
+<blockquote>- 💸 مبلغ نهایی تأییدشده توسط تون‌پی : {$rxFmtCreditAmount} تومان</blockquote>
 <blockquote>- 💳 روش پرداخت : تون‌پی</blockquote>";
     if (strlen($setting['Channel_Report']) > 0) {
         telegram('sendmessage', [

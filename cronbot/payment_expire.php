@@ -32,8 +32,9 @@ $datatextbot = array(
     'tonpay' => '',
     'cubepay' => '',
     'blupal' => '',
+    'variza' => '',
+    'abangateway' => '',
     'atlaspay' => '',
-    'tetrapay' => '',
     'aqayepardakht' => '',
     'zarinpal' => '',
     'zarinpay' => '',
@@ -57,15 +58,21 @@ if ($table_exists) {
         );
     }
     foreach ($data_text_bot as $item) {
-        if (isset($datatextbot[$item['id_text']])) {
+        if (array_key_exists($item['id_text'], $datatextbot) || (is_string($item['text']) && trim($item['text']) !== '')) {
             $datatextbot[$item['id_text']] = $item['text'];
         }
     }
 }
 $month_date_time_start = date('Y/m/d H:i:s', time() - 1800);
-$stmt = $pdo->prepare("SELECT * FROM Payment_report WHERE time < :cutoff AND payment_Status = 'Unpaid' AND (crypto_currency IS NULL OR crypto_currency = '') ORDER BY id ASC LIMIT 120");
+$stmt = $pdo->prepare("SELECT * FROM Payment_report WHERE time < :cutoff AND payment_Status = 'Unpaid' AND (crypto_currency IS NULL OR crypto_currency = '') AND Payment_Method <> 'tonpay' ORDER BY id ASC LIMIT 120");
 $stmt->execute([':cutoff' => $month_date_time_start]);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$tonpay_date_time_start = date('Y/m/d H:i:s', time() - 86400);
+$tonpayStmt = $pdo->prepare("SELECT * FROM Payment_report WHERE time < :cutoff AND payment_Status = 'Unpaid' AND Payment_Method = 'tonpay' ORDER BY id ASC LIMIT 120");
+$tonpayStmt->execute([':cutoff' => $tonpay_date_time_start]);
+$tonpayRows = $tonpayStmt->fetchAll(PDO::FETCH_ASSOC);
+$rows = array_merge($rows, $tonpayRows);
 
 $expireStmt = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'expire' WHERE id_order = :o AND payment_Status = 'Unpaid'");
 
@@ -83,8 +90,9 @@ foreach ($rows as $result) {
         'tonpay' => $datatextbot['tonpay'],
         'cubepay' => $datatextbot['cubepay'],
         'blupal' => $datatextbot['blupal'],
+        'variza' => $datatextbot['variza'],
+        'abangateway' => $datatextbot['abangateway'],
         'atlaspay' => $datatextbot['atlaspay'],
-        'tetrapay' => $datatextbot['tetrapay'],
         'Currency Rial tow' => "پرداخت ارزی ریالی",
         'Currency Rial gateway3' => "پرداخت ریالی دوم",
         'perfect' => "پرفکت مانی",
@@ -99,7 +107,7 @@ foreach ($rows as $result) {
 
 🛒 روش پرداختی شما : $status_var
 📌 کد فاکتور : <code>{$result['id_order']}</code>
-🪙 مبلغ فاکتور :  {$result['price']} تومان";
+🪙 مبلغ فاکتور :  " . rxFormatToman($result['price']) . " تومان";
 
     $expireStmt->execute([':o' => $result['id_order']]);
     if ($expireStmt->rowCount() !== 1) {

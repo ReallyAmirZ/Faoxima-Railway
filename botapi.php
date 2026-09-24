@@ -1725,8 +1725,9 @@ if (!function_exists('rx_getKeyboardDefaultStyles')) {
                     'tonpay_name'      => 'primary',
                     'cubepay_name'     => 'primary',
                     'blupal_name'      => 'primary',
+                    'variza_name'      => 'primary',
+                    'abangateway_name' => 'primary',
                     'atlaspay_name'    => 'primary',
-                    'tetrapay_name'    => 'primary',
                 ],
                 'admin_features' => [
                     'feat_info'     => 'success',
@@ -2794,15 +2795,6 @@ function pinmessage($from_id,$message_id){
   return telegram('unpinAllChatMessages', [
 'chat_id' => $from_id,
 ]);
- }
-function getChatPinnedMessageId($chat_id){
-  $resp = telegram('getChat', [
-'chat_id' => $chat_id,
-]);
-  if (isset($resp['ok']) && $resp['ok'] && isset($resp['result']['pinned_message']['message_id'])) {
-    return (int) $resp['result']['pinned_message']['message_id'];
-  }
-  return null;
  }
   function answerInlineQuery($inline_query_id,$results){
   return telegram('answerInlineQuery', [

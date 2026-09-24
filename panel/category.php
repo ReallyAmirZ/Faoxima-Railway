@@ -43,11 +43,8 @@ if (!empty($_POST['action']) && $_POST['action'] === 'edit') {
         $old = $pdo->prepare("SELECT remark FROM category WHERE id = :id");
         $old->execute([':id' => $id]);
         $oldRemark = (string)($old->fetchColumn() ?: '');
-        $pdo->prepare("UPDATE category SET remark = :remark WHERE id = :id")
-            ->execute([':remark' => $remark, ':id' => $id]);
         if ($oldRemark !== '' && $oldRemark !== $remark) {
-            $pdo->prepare("UPDATE product SET category = :new WHERE category = :old")
-                ->execute([':new' => $remark, ':old' => $oldRemark]);
+            rxCategoryRenameCascade($pdo, $oldRemark, $remark);
         }
     }
     header('Location: category.php');
@@ -57,7 +54,12 @@ if (!empty($_POST['action']) && $_POST['action'] === 'edit') {
 if (!empty($_POST['action']) && $_POST['action'] === 'delete') {
     $id = (int)($_POST['id'] ?? 0);
     if ($id > 0) {
-        $pdo->prepare("DELETE FROM category WHERE id = :id")->execute([':id' => $id]);
+        $old = $pdo->prepare("SELECT remark FROM category WHERE id = :id");
+        $old->execute([':id' => $id]);
+        $oldRemark = (string)($old->fetchColumn() ?: '');
+        if ($oldRemark !== '') {
+            rxCategoryDeleteGuarded($pdo, $oldRemark, $id);
+        }
     }
     header('Location: category.php');
     exit;
@@ -65,7 +67,15 @@ if (!empty($_POST['action']) && $_POST['action'] === 'delete') {
 
 if (!empty($_POST['action']) && $_POST['action'] === 'bulk_delete') {
     $requestedIds = $_POST['ids'] ?? [];
-    $deletedCount = fx_bulk_delete_ids($pdo, 'category', 'id', $requestedIds);
+    $deletedCount = 0;
+    $remarkStmt = $pdo->prepare("SELECT remark FROM category WHERE id = :id");
+    foreach (array_values(array_unique(array_filter(array_map('intval', (array) $requestedIds), function ($v) { return $v > 0; }))) as $bulkId) {
+        $remarkStmt->execute([':id' => $bulkId]);
+        $bulkRemark = (string)($remarkStmt->fetchColumn() ?: '');
+        if ($bulkRemark !== '' && rxCategoryDeleteGuarded($pdo, $bulkRemark, $bulkId)) {
+            $deletedCount++;
+        }
+    }
     fx_bulk_delete_redirect('category.php', count($requestedIds), $deletedCount);
 }
 
@@ -93,14 +103,14 @@ $categories = $query->fetchAll();
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>مدیریت دسته‌بندی‌ها | ربات فاکسیما</title>
-    <link rel="stylesheet" href="css/theme.css?v=flat47">
-    <script src="js/theme.js?v=flat5" defer></script>
+    <link rel="stylesheet" href="css/theme.css?v=flat50">
+    <script src="js/theme.js?v=flat50" defer></script>
 </head>
 <body>
 <section id="container">
     <?php include("header.php"); ?>
     <section id="main-content">
-        <div class="wrapper">
+        <div class="wrapper fx-page-list">
             <div class="page-head">
                 <div>
                     <div class="page-head__title">

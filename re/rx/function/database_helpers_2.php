@@ -310,7 +310,7 @@ if (!function_exists('nm_validateSellDiscount')) {
         }
 
         if ($section !== 'charge' && intval($user['pricediscount'] ?? 0) != 0) {
-            $res['reason'] = '❌ شما تخفیف اختصاصی دارید و امکان استفاده از کد تخفیف وجود ندارد.';
+            $res['reason'] = faoxima_textbot_get('dyn_errors_exclusive_discount_conflict', '❌ شما تخفیف اختصاصی دارید و امکان استفاده از کد تخفیف وجود ندارد.');
             return $res;
         }
 
@@ -352,7 +352,7 @@ if (!function_exists('nm_validateSellDiscount')) {
         }
 
         if (intval($row['time']) != 0 && time() >= intval($row['time'])) {
-            $res['reason'] = '❌ زمان کد تخفیف به پایان رسیده است.';
+            $res['reason'] = faoxima_textbot_get('dyn_errors_discount_expired', '❌ زمان کد تخفیف به پایان رسیده است.');
             return $res;
         }
 
@@ -592,13 +592,13 @@ if (!function_exists('payAffiliateCommissionForPurchase')) {
             $stmt->execute([':d' => $commission, ':u' => $referrerId]);
         }
         if (function_exists('wallet_ledger_record')) {
-            wallet_ledger_record($referrerId, 'credit', $commission, 'affiliate_commission', 'پورسانت خرید زیرمجموعه', null, 'user', (string) $buyerId);
+            wallet_ledger_record($referrerId, 'credit', $commission, 'affiliate_commission', faoxima_textbot_get('dyn_purchase_affiliate_commission_ledger_note', 'پورسانت خرید زیرمجموعه'), null, 'user', (string) $buyerId);
         }
 
         if ((int) ($setting['scorestatus'] ?? 0) === 1 && function_exists('sendmessage')) {
             $admin_ids = $GLOBALS['admin_ids'] ?? [];
             if (!in_array($referrerId, $admin_ids)) {
-                sendmessage($referrerId, "📌شما 2 امتیاز جدید کسب کردید.", null, 'html');
+                sendmessage($referrerId, faoxima_textbot_get('dyn_purchase_score_earned_2', "📌شما 2 امتیاز جدید کسب کردید."), null, 'html');
                 update('user', 'score', (int) $referrer['score'] + 2, 'id', $referrerId);
             }
         }
@@ -636,52 +636,120 @@ function StatusPayment($paymentid)
     curl_close($curl);
     return $response;
 }
-function channel(array $id_channel)
+if (!function_exists('rx_normalize_channel_chat_id')) {
+    function rx_normalize_channel_chat_id($value)
+    {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+        if (preg_match('/^-\d{5,}$/', $value)) {
+            return $value;
+        }
+        if (preg_match('/^@[A-Za-z][A-Za-z0-9_]{3,31}$/', $value)) {
+            return $value;
+        }
+        if (preg_match('~^(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)/(?:s/)?([A-Za-z][A-Za-z0-9_]{3,31})/?(?:\?.*)?$~i', $value, $m)
+            && strtolower($m[1]) !== 'joinchat') {
+            return '@' . $m[1];
+        }
+        if (preg_match('/^[A-Za-z][A-Za-z0-9_]{3,31}$/', $value)) {
+            return '@' . $value;
+        }
+        return '';
+    }
+}
+
+if (!function_exists('rx_channel_member_state')) {
+    function rx_channel_member_state($channel, $userId)
+    {
+        $chatId = rx_normalize_channel_chat_id($channel);
+        $response = null;
+        if ($chatId !== '') {
+            for ($attempt = 1; $attempt <= 2; $attempt++) {
+                $response = telegram('getChatMember', [
+                    'chat_id' => $chatId,
+                    'user_id' => $userId
+                ]);
+                if (is_array($response) && !empty($response['ok'])) {
+                    $status = (string) ($response['result']['status'] ?? '');
+                    if (in_array($status, ['member', 'creator', 'administrator'], true)) {
+                        return 'MEMBER';
+                    }
+                    if ($status === 'restricted') {
+                        return !empty($response['result']['is_member']) ? 'MEMBER' : 'NOT_MEMBER';
+                    }
+                    if (in_array($status, ['left', 'kicked'], true)) {
+                        return 'NOT_MEMBER';
+                    }
+                    $response = ['ok' => false, 'error_code' => 0, 'description' => 'unexpected member status: ' . $status];
+                    break;
+                }
+                $errorCode = is_array($response) ? (int) ($response['error_code'] ?? 0) : 0;
+                $retryAfter = is_array($response) ? (int) ($response['parameters']['retry_after'] ?? 0) : 0;
+                if ($attempt === 1 && $errorCode === 429 && $retryAfter <= 2) {
+                    sleep(max(1, $retryAfter));
+                    continue;
+                }
+                if ($attempt === 1 && $errorCode >= 500) {
+                    usleep(500000);
+                    continue;
+                }
+                break;
+            }
+        } else {
+            $response = ['ok' => false, 'error_code' => 0, 'description' => 'invalid channel identifier'];
+        }
+        $errorCode = is_array($response) ? (int) ($response['error_code'] ?? 0) : 0;
+        $description = is_array($response) ? (string) ($response['description'] ?? '') : 'empty response';
+        $parameters = is_array($response) && isset($response['parameters']) ? $response['parameters'] : null;
+        $logContext = [
+            'status' => $errorCode,
+            'body' => (string) $channel . '|' . $description,
+            'channel' => (string) $channel,
+            'chat_id' => $chatId,
+            'user_id' => (string) $userId,
+            'error_code' => $errorCode,
+            'description' => $description,
+            'retry_after' => is_array($parameters) ? (int) ($parameters['retry_after'] ?? 0) : 0,
+            'parameters' => $parameters !== null ? json_encode($parameters) : '',
+        ];
+        if (function_exists('rx_log_event')) {
+            rx_log_event('CHANNEL_CHECK_FAILED', 'getChatMember did not return a usable result', $logContext);
+        } else {
+            error_log('[CHANNEL_CHECK_FAILED] ' . json_encode($logContext));
+        }
+        return 'CHECK_FAILED';
+    }
+}
+
+function channel(array $id_channel, &$check_failed = null)
 {
     global $from_id;
     $channel_link = [];
+    $failed = [];
     foreach ($id_channel as $channel) {
         $channel = trim((string) $channel);
         if ($channel === '') {
             continue;
         }
-        $response = telegram('getChatMember', [
-            'chat_id' => $channel,
-            'user_id' => $from_id
-        ]);
-        $isMember = false;
-        if (isset($response['ok']) && $response['ok']) {
-            $status = $response['result']['status'] ?? '';
-            if (in_array($status, ['member', 'creator', 'administrator'], true)) {
-                $isMember = true;
-            } elseif ($status === 'restricted' && !empty($response['result']['is_member'])) {
-                $isMember = true;
-            }
-        }
-        if (!$isMember) {
+        $state = rx_channel_member_state($channel, $from_id);
+        if ($state === 'NOT_MEMBER') {
             $channel_link[] = $channel;
+        } elseif ($state === 'CHECK_FAILED') {
+            $failed[] = $channel;
         }
     }
+    if (func_num_args() < 2) {
+        return array_merge($channel_link, $failed);
+    }
+    $check_failed = $failed;
     return $channel_link;
 }
 function isValidDate($date)
 {
     return (strtotime($date) != false);
 }
-function rxGatewayTruthy($value)
-{
-    if (is_bool($value)) {
-        return $value;
-    }
-    if (is_int($value) || is_float($value)) {
-        return (int) $value === 1;
-    }
-    if (is_string($value)) {
-        return in_array(strtolower(trim($value)), ['1', 'true', 'success', 'successful', 'ok', 'yes'], true);
-    }
-    return false;
-}
-
 function tronadoExtractPaymentToken($payment)
 {
     if (!is_array($payment)) {
@@ -1174,121 +1242,6 @@ function atlaspayAccount()
     return atlaspayCurlJson('GET', ATLASPAY_BASE_URL . '/account', [], $apiKey);
 }
 
-function tetrapayApiKey()
-{
-    return trim((string) select("PaySetting", "*", "NamePay", "apitetrapay", "select")['ValuePay']);
-}
-
-function tetrapayBaseUrl()
-{
-    $url = trim((string) select("PaySetting", "*", "NamePay", "apiurltetrapay", "select")['ValuePay']);
-    return $url !== '' ? rtrim($url, '/') . '/api/v1' : '';
-}
-
-function tetrapayCurlJson($method, $endpoint, array $payload, $apiKey)
-{
-    $headers = ['Content-Type: application/json'];
-    if ($apiKey !== null) {
-        $headers[] = 'X-API-Key: ' . $apiKey;
-    }
-
-    $curl = curl_init();
-    $opts = array(
-        CURLOPT_URL => $endpoint,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_ENCODING => '',
-        CURLOPT_MAXREDIRS => 10,
-        CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_TIMEOUT => 30,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-        CURLOPT_CUSTOMREQUEST => $method,
-        CURLOPT_HTTPHEADER => $headers,
-    );
-    if ($method === 'POST') {
-        $opts[CURLOPT_POSTFIELDS] = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    }
-    curl_setopt_array($curl, $opts);
-
-    $response = curl_exec($curl);
-    $curlErrno = curl_errno($curl);
-    $curlError = curl_error($curl);
-    $curlInfo = curl_getinfo($curl);
-    $statusCode = $curlInfo['http_code'] ?? null;
-    curl_close($curl);
-
-    if ($response === false) {
-        error_log('TetraPay request failed: ' . json_encode([
-            'url' => $endpoint,
-            'error' => $curlError,
-            'errno' => $curlErrno,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        return null;
-    }
-
-    $decoded = json_decode($response, true);
-    if (!is_array($decoded)) {
-        error_log('TetraPay invalid response: ' . json_encode([
-            'url' => $endpoint,
-            'status_code' => $statusCode,
-            'raw_response' => $response,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        return null;
-    }
-
-    $decoded['status_code'] = $statusCode;
-    return $decoded;
-}
-
-function tetrapayCreatePaymentLink($amount)
-{
-    $apiKey = tetrapayApiKey();
-    if ($apiKey === '') {
-        return [
-            'ok' => false,
-            'error' => 'کلید API تتراپی تنظیم نشده است',
-        ];
-    }
-    $baseUrl = tetrapayBaseUrl();
-    if ($baseUrl === '') {
-        return [
-            'ok' => false,
-            'error' => 'آدرس سرور API تتراپی تنظیم نشده است',
-        ];
-    }
-
-    $requestPayload = [
-        'amount' => (int) $amount,
-    ];
-
-    $endpoint = $baseUrl . '/payment-link';
-    $decoded = tetrapayCurlJson('POST', $endpoint, $requestPayload, $apiKey);
-
-    if (!is_array($decoded) || empty($decoded['ok']) || empty($decoded['token']) || empty($decoded['link'])) {
-        $errorPayload = [
-            'ok' => false,
-            'error' => is_array($decoded) ? ($decoded['error'] ?? 'پاسخ نامعتبر از سرویس تتراپی') : 'پاسخ نامعتبر از سرویس تتراپی',
-            'raw' => $decoded,
-        ];
-        error_log('TetraPay create payment-link failed: ' . json_encode($errorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        return $errorPayload;
-    }
-
-    return $decoded;
-}
-
-function tetrapayCheckStatus($token)
-{
-    $apiKey = tetrapayApiKey();
-    $baseUrl = tetrapayBaseUrl();
-    if ($apiKey === '' || $baseUrl === '') {
-        return null;
-    }
-
-    $endpoint = $baseUrl . '/payment-status/' . rawurlencode((string) $token);
-    return tetrapayCurlJson('GET', $endpoint, [], $apiKey);
-}
-
 const BLUPAL_RIAL_PER_TOMAN = 10;
 
 function blupalCurlJson($method, $endpoint, array $payload, $apiKey)
@@ -1605,6 +1558,320 @@ function cubepayVerifyCryptoCallbackSignature($orderId, $status, $amount, $sig)
     $expectedSig = hash_hmac('sha256', $orderId . '|' . $status . '|' . $amount, $apiToken);
     return hash_equals($expectedSig, (string) $sig);
 }
+
+/**
+ * Variza — automated card-to-card gateway (https://variza.ir).
+ *
+ * Same role as cubepayCreatePayment(): create a payment link for an order and
+ * return a normalized array. Verification is push-only (payment/variza_webhook.php),
+ * so there is no verify/status counterpart here.
+ */
+function varizaApiToken()
+{
+    return trim((string) select("PaySetting", "*", "NamePay", "apivariza", "select")['ValuePay']);
+}
+
+function varizaCreatePayment($order_id, $amount_toman)
+{
+    global $domainhosts;
+
+    $apiToken = varizaApiToken();
+    if ($apiToken === '' || $apiToken === '0') {
+        return [
+            'success' => false,
+            'message' => 'توکن API واریزا تنظیم نشده است',
+        ];
+    }
+
+    $payload = [
+        'amount' => (int) $amount_toman,
+        'return_url' => 'https://' . $domainhosts . '/payment/variza_return.php?order=' . $order_id,
+        'title' => 'Faoxima order ' . $order_id,
+        'expires_in' => '1h',
+    ];
+
+    $curl = curl_init();
+    curl_setopt_array($curl, [
+        CURLOPT_URL => 'https://variza.ir/api/v1/pay',
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_ENCODING => '',
+        CURLOPT_MAXREDIRS => 10,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'Accept: application/json',
+            'Authorization: Bearer ' . $apiToken,
+        ],
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $response = curl_exec($curl);
+    $curlErrno = curl_errno($curl);
+    $curlError = curl_error($curl);
+    $statusCode = (int) (curl_getinfo($curl, CURLINFO_HTTP_CODE) ?? 0);
+    curl_close($curl);
+
+    if ($response === false) {
+        error_log('Variza create payment failed: ' . json_encode([
+            'error' => $curlError,
+            'errno' => $curlErrno,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return [
+            'success' => false,
+            'message' => 'خطا در ارتباط با سرویس واریزا',
+        ];
+    }
+
+    $decoded = json_decode($response, true);
+    if (!is_array($decoded) || $statusCode < 200 || $statusCode >= 300) {
+        error_log('Variza invalid response: ' . json_encode([
+            'status_code' => $statusCode,
+            'raw_response' => $response,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return [
+            'success' => false,
+            'message' => is_array($decoded) ? ($decoded['message'] ?? 'پاسخ نامعتبر از سرویس واریزا') : 'پاسخ نامعتبر از سرویس واریزا',
+            'raw' => $decoded,
+        ];
+    }
+
+    $slug = trim((string) ($decoded['slug'] ?? ''));
+    $payUrl = trim((string) ($decoded['pay_url'] ?? ''));
+    if ($slug === '' || $payUrl === '') {
+        error_log('Variza missing slug/pay_url: ' . json_encode($decoded, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return [
+            'success' => false,
+            'message' => 'پاسخ نامعتبر از سرویس واریزا',
+            'raw' => $decoded,
+        ];
+    }
+
+    return [
+        'success' => true,
+        'slug' => $slug,
+        'pay_url' => $payUrl,
+    ];
+}
+/**
+ * AbanGateway — automated card-to-card gateway (https://abangateway.ir).
+ *
+ * The buyer transfers straight to the seller's own card and the payment is
+ * confirmed from the bank's SMS, so there is no receipt to approve. Two
+ * settings drive it, both handed out by AbanGateway's Telegram bot when the
+ * seller connects this bot: the gateway address and the connection key. The
+ * address is a prefix — `/create` and `/verify` are appended here.
+ *
+ * Settlement is push + pull: AbanGateway calls payment/abangateway.php when
+ * the money lands, and that file asks abangatewayVerifyPayment() before it
+ * credits anything. Nothing in the push itself is trusted.
+ */
+function abangatewayEndpoint()
+{
+    $row = select("PaySetting", "ValuePay", "NamePay", "urlabangateway", "select");
+    $url = is_array($row) ? rtrim(trim((string) ($row['ValuePay'] ?? '')), '/') : '';
+    // https only: the key rides in a header on every call.
+    if ($url === '' || stripos($url, 'https://') !== 0 || filter_var($url, FILTER_VALIDATE_URL) === false) {
+        return null;
+    }
+    return $url;
+}
+
+function abangatewayApiKey()
+{
+    $row = select("PaySetting", "ValuePay", "NamePay", "apiabangateway", "select");
+    $key = is_array($row) ? trim((string) ($row['ValuePay'] ?? '')) : '';
+    return ($key === '0') ? '' : $key;
+}
+
+/**
+ * On, with an https address and a key. The buyer's button and the mini app's
+ * method list both ask this, so a half-configured gateway is never offered.
+ */
+function abangatewayIsReady()
+{
+    $row = select("PaySetting", "ValuePay", "NamePay", "statusabangateway", "select");
+    $status = is_array($row) ? (string) ($row['ValuePay'] ?? '') : '';
+    return $status === 'onabangateway' && abangatewayEndpoint() !== null && abangatewayApiKey() !== '';
+}
+
+/**
+ * The buyer's payment page for an authority this bot was given, or null.
+ *
+ * The page lives on the gateway's own origin at /pay/{invoice}, and the
+ * authority is "abn_" + that invoice id, so the link can be rebuilt from the
+ * stored authority without keeping a second column for it.
+ */
+function abangatewayPayUrlFor($authority)
+{
+    $authority = trim((string) $authority);
+    $endpoint = abangatewayEndpoint();
+    if ($endpoint === null || !preg_match('/^abn_([A-Za-z0-9_]{6,64})$/', $authority, $match)) {
+        return null;
+    }
+    $parts = parse_url($endpoint);
+    if (!is_array($parts) || empty($parts['host'])) {
+        return null;
+    }
+    $origin = 'https://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '');
+    return $origin . '/pay/' . $match[1];
+}
+
+function abangatewayRequest($path, array $payload)
+{
+    $endpoint = abangatewayEndpoint();
+    $apiKey = abangatewayApiKey();
+    if ($endpoint === null || $apiKey === '') {
+        return [
+            'ok' => false,
+            'status_code' => 0,
+            'data' => null,
+            'message' => 'آدرس درگاه یا کلید اتصال آبان گیت وی تنظیم نشده است',
+        ];
+    }
+
+    $curl = curl_init();
+    curl_setopt_array($curl, [
+        CURLOPT_URL => $endpoint . $path,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_ENCODING => '',
+        CURLOPT_MAXREDIRS => 3,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'Accept: application/json',
+            'Authorization: Bearer ' . $apiKey,
+        ],
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $response = curl_exec($curl);
+    $curlErrno = curl_errno($curl);
+    $curlError = curl_error($curl);
+    $statusCode = (int) (curl_getinfo($curl, CURLINFO_HTTP_CODE) ?? 0);
+    curl_close($curl);
+
+    if ($response === false) {
+        error_log('AbanGateway request failed: ' . json_encode([
+            'path' => $path,
+            'error' => $curlError,
+            'errno' => $curlErrno,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return [
+            'ok' => false,
+            'status_code' => 0,
+            'data' => null,
+            'message' => 'خطا در ارتباط با آبان گیت وی',
+        ];
+    }
+
+    $decoded = json_decode($response, true);
+    if (!is_array($decoded)) {
+        error_log('AbanGateway invalid response: ' . json_encode([
+            'path' => $path,
+            'status_code' => $statusCode,
+            'raw_response' => mb_substr((string) $response, 0, 500),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return [
+            'ok' => false,
+            'status_code' => $statusCode,
+            'data' => null,
+            'message' => 'پاسخ نامعتبر از آبان گیت وی',
+        ];
+    }
+
+    // A refusal says why in `message`; a rejected key says it in `error`.
+    $message = (string) ($decoded['message'] ?? ($decoded['error'] ?? ''));
+    return [
+        'ok' => $statusCode >= 200 && $statusCode < 300,
+        'status_code' => $statusCode,
+        'data' => $decoded,
+        'message' => $message,
+    ];
+}
+
+function abangatewayCreatePayment($order_id, $amount_toman, $user_id = null)
+{
+    global $domainhosts;
+
+    $payload = [
+        // Toman, like every other gateway here; AbanGateway converts once.
+        'amount' => (int) $amount_toman,
+        'order_id' => (string) $order_id,
+        'callback_url' => 'https://' . $domainhosts . '/payment/abangateway.php?order=' . rawurlencode((string) $order_id),
+    ];
+    if ($user_id !== null && $user_id !== '') {
+        $payload['user_id'] = (string) $user_id;
+    }
+
+    $answer = abangatewayRequest('/create', $payload);
+    $data = is_array($answer['data']) ? $answer['data'] : [];
+
+    if (!$answer['ok'] || empty($data['success'])) {
+        return [
+            'success' => false,
+            'message' => $answer['message'] !== '' ? $answer['message'] : 'ساخت لینک پرداخت در آبان گیت وی ناموفق بود',
+            'status_code' => $answer['status_code'],
+        ];
+    }
+
+    $authority = trim((string) ($data['authority'] ?? ''));
+    $payUrl = trim((string) ($data['payment_link'] ?? ''));
+    if ($authority === '' || stripos($payUrl, 'https://') !== 0) {
+        error_log('AbanGateway missing authority/payment_link: ' . json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return [
+            'success' => false,
+            'message' => 'پاسخ نامعتبر از آبان گیت وی',
+        ];
+    }
+
+    return [
+        'success' => true,
+        'authority' => $authority,
+        'pay_url' => $payUrl,
+    ];
+}
+
+/**
+ * Ask the gateway, server to server, whether this order was paid.
+ *
+ * `paid` is true only when the gateway says so AND names the same order AND
+ * reports at least the billed amount. The amount comes back in Rial.
+ */
+function abangatewayVerifyPayment($authority, $order_id, $billed_toman)
+{
+    $answer = abangatewayRequest('/verify', [
+        'authority' => (string) $authority,
+        'order_id' => (string) $order_id,
+    ]);
+    $data = is_array($answer['data']) ? $answer['data'] : [];
+
+    $result = [
+        'paid' => false,
+        'reachable' => $answer['status_code'] > 0,
+        'status_code' => $answer['status_code'],
+        'message' => $answer['message'],
+        'amount_rial' => (int) ($data['amount'] ?? 0),
+    ];
+    if (!$answer['ok'] || empty($data['success'])) {
+        return $result;
+    }
+    if ((string) ($data['order_id'] ?? '') !== (string) $order_id) {
+        $result['message'] = 'order mismatch';
+        return $result;
+    }
+    if ($result['amount_rial'] < ((int) $billed_toman) * 10) {
+        $result['message'] = 'amount mismatch';
+        return $result;
+    }
+    $result['paid'] = true;
+    return $result;
+}
 function formatBytes($bytes, $precision = 2): string
 {
     $base = log($bytes, 1024);
@@ -1837,10 +2104,120 @@ function normalizeServiceConfigs($configs, $subscriptionUrl = null)
 
     return array_values($normalized);
 }
+if (!function_exists('rxEnsureManagePanel')) {
+    function rxEnsureManagePanel()
+    {
+        global $ManagePanel;
+
+        if (isset($ManagePanel) && is_object($ManagePanel)) {
+            return $ManagePanel;
+        }
+
+        if (!class_exists('ManagePanel', false)) {
+            $rxPanelsFile = REFACTORED_LEGACY_ROOT . '/panels.php';
+            if (!is_file($rxPanelsFile)) {
+                if (function_exists('rx_log_event')) {
+                    rx_log_event('MANAGE_PANEL_UNAVAILABLE', 'panels.php not found', ['path' => $rxPanelsFile]);
+                }
+                return null;
+            }
+            $rxPrevErrorLog = ini_get('error_log');
+            try {
+                require_once $rxPanelsFile;
+            } catch (Throwable $e) {
+                if (function_exists('rx_log_event')) {
+                    rx_log_event('MANAGE_PANEL_UNAVAILABLE', 'Loading panels.php threw', [
+                        'class' => get_class($e),
+                        'err' => $e->getMessage(),
+                        'file' => $e->getFile(),
+                        'line' => $e->getLine(),
+                    ]);
+                }
+            }
+            if ($rxPrevErrorLog !== false) {
+                ini_set('error_log', $rxPrevErrorLog);
+            }
+        }
+
+        if (!class_exists('ManagePanel', false)) {
+            return null;
+        }
+
+        try {
+            $ManagePanel = new ManagePanel();
+        } catch (Throwable $e) {
+            if (function_exists('rx_log_event')) {
+                rx_log_event('MANAGE_PANEL_UNAVAILABLE', 'ManagePanel construction threw', [
+                    'class' => get_class($e),
+                    'err' => $e->getMessage(),
+                ]);
+            }
+            return null;
+        }
+
+        return $ManagePanel;
+    }
+}
+if (!function_exists('rxEnsurePaymentRuntime')) {
+    function rxEnsurePaymentRuntime()
+    {
+        global $setting, $textbotlang, $datatextbot;
+
+        try {
+            if (!is_array($setting) && function_exists('select')) {
+                $rxSetting = select("setting", "*");
+                if (is_array($rxSetting)) {
+                    $setting = $rxSetting;
+                }
+            }
+
+            if ((!is_array($textbotlang) || $textbotlang === []) && function_exists('languagechange')) {
+                $rxLang = languagechange(REFACTORED_LEGACY_ROOT . '/text.json');
+                if (is_array($rxLang) && $rxLang !== []) {
+                    $textbotlang = $rxLang;
+                }
+            }
+
+            if (!is_array($datatextbot)) {
+                $datatextbot = [];
+            }
+            $rxMissingKeys = array_diff(['textafterpay', 'textaftertext', 'textmanual', 'textselectlocation', 'text_wgdashboard'], array_keys($datatextbot));
+            if ($rxMissingKeys !== []) {
+                $rxTextRows = isset($GLOBALS['_rx_textbot_rows']) && is_array($GLOBALS['_rx_textbot_rows'])
+                    ? $GLOBALS['_rx_textbot_rows']
+                    : (function_exists('select') ? select("textbot", "*", null, null, "fetchAll") : []);
+                foreach ($rxMissingKeys as $rxKey) {
+                    $datatextbot[$rxKey] = '';
+                }
+                foreach ((array) $rxTextRows as $rxRow) {
+                    $rxId = (string) ($rxRow['id_text'] ?? '');
+                    if (in_array($rxId, $rxMissingKeys, true)) {
+                        $datatextbot[$rxId] = (string) ($rxRow['text'] ?? '');
+                    } elseif ($rxId !== '' && !array_key_exists($rxId, $datatextbot) && trim((string) ($rxRow['text'] ?? '')) !== '') {
+                        $datatextbot[$rxId] = (string) $rxRow['text'];
+                    }
+                }
+            }
+
+            if (!function_exists('createServiceInfoCard') && is_file(REFACTORED_LEGACY_ROOT . '/infocard.php')) {
+                require_once REFACTORED_LEGACY_ROOT . '/infocard.php';
+            }
+        } catch (Throwable $e) {
+            if (function_exists('rx_log_event')) {
+                rx_log_event('PAYMENT_RUNTIME_INIT_FAILED', $e->getMessage(), [
+                    'class' => get_class($e),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ]);
+            }
+        }
+    }
+}
 function DirectPayment($order_id, $image = 'images.jpg')
 {
     global $pdo, $ManagePanel, $textbotlang, $keyboardextendfnished, $keyboard, $Confirm_pay, $from_id, $message_id, $datatextbot, $update;
-    $buyreport = select("topicid", "idreport", "report", "buyreport", "select")['idreport'];
+    rxEnsurePaymentRuntime();
+    $buyreport =select("topicid", "idreport", "report", "buyreport", "select")['idreport'];
     $admin_ids = select("admin", "id_admin", null, null, "FETCH_COLUMN");
     $otherservice = select("topicid", "idreport", "report", "otherservice", "select")['idreport'];
     $otherreport = select("topicid", "idreport", "report", "otherreport", "select")['idreport'];
@@ -1867,54 +2244,31 @@ function DirectPayment($order_id, $image = 'images.jpg')
     update("user", "Processing_value_tow", "0", "id", $Balance_id['id']);
     update("user", "Processing_value_four", "0", "id", $Balance_id['id']);
     if ($steppay[0] == "getconfigafterpay") {
-        // [invoice lookup with fallbacks] گاهی به‌خاطر race/cleanup/timing بین crypto-pay و DirectPayment،
-        // فاکتور با username + Status='unpaid' پیدا نمیشه. چندتا fallback می‌گذاریم تا قبل از refund همه گزینه‌ها تست بشن.
         $__invUsername = isset($steppay[1]) ? trim((string)$steppay[1]) : '';
+        $__invOwner = trim((string)($Payment_report['id_user'] ?? ''));
         $get_invoice = false;
-        if ($__invUsername !== '') {
+        $__invLookupError = false;
+        if ($__invUsername !== '' && $__invOwner !== '') {
             try {
-                // 1) دقیقا مثل قبل: username + Status='unpaid'
-                $stmt = $pdo->prepare("SELECT * FROM invoice WHERE username = :u AND Status = 'unpaid' ORDER BY id_invoice DESC LIMIT 1");
-                $stmt->execute([':u' => $__invUsername]);
+                $stmt = $pdo->prepare("SELECT * FROM invoice WHERE username = :u AND id_user = :uid AND Status IN ('unpaid', 'Unpaid') ORDER BY id_invoice DESC LIMIT 1");
+                $stmt->execute([':u' => $__invUsername, ':uid' => $__invOwner]);
                 $get_invoice = $stmt->fetch(PDO::FETCH_ASSOC);
-            } catch (Throwable $__e) { $get_invoice = false; }
+            } catch (Throwable $__e) { $get_invoice = false; $__invLookupError = true; }
             if (!$get_invoice) {
                 try {
-                    // 2) بدون فیلتر Status (در صورت تفاوت case یا تغییر status توسط cron دیگه)
-                    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE username = :u ORDER BY id_invoice DESC LIMIT 1");
-                    $stmt->execute([':u' => $__invUsername]);
+                    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE LOWER(username) = LOWER(:u) AND id_user = :uid AND Status IN ('unpaid', 'Unpaid') ORDER BY id_invoice DESC LIMIT 1");
+                    $stmt->execute([':u' => $__invUsername, ':uid' => $__invOwner]);
                     $get_invoice = $stmt->fetch(PDO::FETCH_ASSOC);
-                } catch (Throwable $__e) { $get_invoice = false; }
+                } catch (Throwable $__e) { $get_invoice = false; $__invLookupError = true; }
             }
-            if (!$get_invoice) {
-                try {
-                    // 3) case-insensitive روی username — اگه collation داره فرق می‌کنه
-                    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE LOWER(username) = LOWER(:u) ORDER BY id_invoice DESC LIMIT 1");
-                    $stmt->execute([':u' => $__invUsername]);
-                    $get_invoice = $stmt->fetch(PDO::FETCH_ASSOC);
-                } catch (Throwable $__e) { $get_invoice = false; }
-            }
-        }
-        if (!$get_invoice) {
-            try {
-                // 4) آخرین چاره: آخرین فاکتور unpaid این کاربر که usernameش با user_id شروع میشه (پترن مرسوم)
-                $stmt = $pdo->prepare("SELECT * FROM invoice WHERE id_user = :uid AND (Status = 'unpaid' OR Status = 'Unpaid') AND username LIKE :prefix ORDER BY time_sell DESC LIMIT 1");
-                $stmt->execute([':uid' => (string)$Balance_id['id'], ':prefix' => $Balance_id['id'] . '_%']);
-                $get_invoice = $stmt->fetch(PDO::FETCH_ASSOC);
-                if (!$get_invoice) {
-                    // اگه پیدا نشد، بدون prefix filter
-                    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE id_user = :uid AND (Status = 'unpaid' OR Status = 'Unpaid') ORDER BY time_sell DESC LIMIT 1");
-                    $stmt->execute([':uid' => (string)$Balance_id['id']]);
-                    $get_invoice = $stmt->fetch(PDO::FETCH_ASSOC);
-                }
-                // [NOTE] قبلاً اینجا username رو به مقدار اصلی (`$__invUsername`) برمی‌گردوندیم،
-                // ولی این باعث می‌شد cycle شکست-retry بی‌نهایت بشه: هر retry با username اصلی duplicate می‌خورد،
-                // یوزرنیم تازه می‌ساخت تو پنل (zombie)، بعد restore دوباره به اصلی، دوباره duplicate، الی آخر.
-                // الان username رو همون که DB داره نگه می‌داریم. اگه retry قبلی یوزر تو پنل ساخته، zombie-rescue
-                // اون رو پیدا می‌کنه و استفاده می‌کنه؛ اگه نساخته، duplicate-retry با random جدید موفق میشه.
-            } catch (Throwable $__e) { $get_invoice = false; }
         }
         // اگه با هیچ روشی پیدا نشد، قبل از اینکه به refund برسیم به ادمین گزارش بدیم و مستقیم برگردیم
+        if (!$get_invoice && $__invLookupError) {
+            if (function_exists('error_log')) {
+                @error_log("[DirectPayment] invoice lookup error for order={$order_id} user={$Balance_id['id']} steppay[1]={$__invUsername} — retryable");
+            }
+            return ['success' => false, 'retryable' => true, 'reason' => 'invoice_lookup_error'];
+        }
         if (!$get_invoice) {
             if (function_exists('error_log')) {
                 @error_log("[DirectPayment] invoice NOT FOUND for order={$order_id} user={$Balance_id['id']} steppay[1]={$__invUsername} — aborting WITHOUT refund (so cryptocheck stuck-refund can handle it cleanly)");
@@ -1934,7 +2288,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     'parse_mode' => 'HTML',
                 ]);
             }
-            return;
+            return ['success' => false, 'retryable' => false, 'reason' => 'invoice_not_found'];
         }
         $userAgent = $Balance_id['agent'] ?? 'f';
         $stmt = $pdo->prepare("SELECT * FROM product WHERE name_product = :name AND (FIND_IN_SET(:loc, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
@@ -2004,6 +2358,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
             // فقط وقتی id_invoice معتبره update کن (جلوی خطای "Column id_invoice cannot be null" گرفته میشه)
             if (!empty($get_invoice['id_invoice'])) {
                 try { update("invoice", "username", $username_ac, "id_invoice", $get_invoice['id_invoice']); } catch (Throwable $__e) { /* fail-open */ }
+                try { update("Payment_report", "id_invoice", "getconfigafterpay|" . $username_ac, "id_order", $order_id); } catch (Throwable $__e) {}
             }
         }
 
@@ -2051,6 +2406,13 @@ function DirectPayment($order_id, $image = 'images.jpg')
         // [zombie-rescue] قبل از تلاش جدید، اگه قبلاً تو panel یوزری برای این کاربر ساخته شده (zombie)،
         // اول بررسی کن: شاید createUser تو call قبلی موفق بوده فقط response نرسیده. اگه پیدا کردیم،
         // از همون استفاده کن (بدون ساختن یوزر جدید) — این جلوی تولید بیشتر zombie رو می‌گیره.
+        $ManagePanel = rxEnsureManagePanel();
+        if (!is_object($ManagePanel)) {
+            if (function_exists('rx_log_event')) {
+                rx_log_event('DIRECT_PAYMENT_NO_MANAGE_PANEL', 'ManagePanel unavailable; buy aborted without side effects', ['id_order' => $order_id]);
+            }
+            return;
+        }
         $__isRetryCall = false;
         try {
             $__pr2 = select("Payment_report", "crypto_check_count", "id_order", $order_id, "select");
@@ -2089,6 +2451,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     if (strlen($username_ac) < 3) $username_ac = 'u' . bin2hex(random_bytes(4));
                     if (!empty($get_invoice['id_invoice'])) {
                         try { update("invoice", "username", $username_ac, "id_invoice", $get_invoice['id_invoice']); } catch (Throwable $__e2) { /* fail-open */ }
+                        try { update("Payment_report", "id_invoice", "getconfigafterpay|" . $username_ac, "id_order", $order_id); } catch (Throwable $__e2) {}
                     }
                     $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_ac, $datac);
                 }
@@ -2103,6 +2466,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                 $__early = $pdo->prepare("UPDATE invoice SET Status = 'active' WHERE id_invoice = :i");
                 $__early->execute([':i' => $get_invoice['id_invoice']]);
             } catch (Throwable $__e) { /* fail-open */ }
+            update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
             // و dec_not_confirmed را با علامت موفقیت بگذار تا retry cron این رو پیدا نکنه
             try {
                 $__doneNote = '[service-created at ' . date('Y-m-d H:i:s') . ' username=' . $dataoutput['username'] . ']';
@@ -2128,7 +2492,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                 ? $textbotlang['users']['sell']['ErrorConfig']
                 : "❌ متاسفانه ساخت سرویس با خطا مواجه شد. مبلغ پرداختی به کیف پول شما برگشت داده شد.";
             sendmessage($Balance_id['id'], $__uiErr, $keyboard, 'HTML');
-            sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل ساخته نشدن سرویس مبلغ $balance تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
+            sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل ساخته نشدن سرویس مبلغ " . rxFormatToman($balance) . " تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
             $texterros = "
 ⭕️ خطا در ساخت کانفیگ
 <blockquote>✍️ دلیل خطا : {$dataoutput['msg']}</blockquote>
@@ -2160,18 +2524,21 @@ function DirectPayment($order_id, $image = 'images.jpg')
             }
         }
         $output_config_link = $marzban_list_get['sublink'] == "onsublink" ? rxResolveConnectionLink($marzban_list_get, $dataoutput['subscription_url'], $dataoutput['file_ext'] ?? null) : "";
-        $datatextbot['textafterpay'] = $marzban_list_get['type'] == "Manualsale" ? $datatextbot['textmanual'] : $datatextbot['textafterpay'];
-        $datatextbot['textafterpay'] = $marzban_list_get['type'] == "WGDashboard" ? $datatextbot['text_wgdashboard'] : $datatextbot['textafterpay'];
+        $rxAfterPayTpl = $marzban_list_get['type'] == "Manualsale" ? $datatextbot['textmanual'] : $datatextbot['textafterpay'];
+        $rxAfterPayTpl = $marzban_list_get['type'] == "WGDashboard" ? $datatextbot['text_wgdashboard'] : $rxAfterPayTpl;
         if (intval($get_invoice['Service_time']) == 0)
             $get_invoice['Service_time'] = $textbotlang['users']['stateus']['Unlimited'];
         if (intval($get_invoice['Volume']) == 0)
             $get_invoice['Volume'] = $textbotlang['users']['stateus']['Unlimited'];
-        $textcreatuser = str_replace('{username}', $dataoutput['username'], $datatextbot['textafterpay']);
+        $textcreatuser = str_replace('{username}', "<code>{$dataoutput['username']}</code>", $rxAfterPayTpl);
         $textcreatuser = str_replace('{name_service}', $get_invoice['name_product'], $textcreatuser);
         $textcreatuser = str_replace('{location}', $marzban_list_get['name_panel'], $textcreatuser);
         $textcreatuser = str_replace('{day}', $get_invoice['Service_time'], $textcreatuser);
         $textcreatuser = str_replace('{volume}', $get_invoice['Volume'], $textcreatuser);
         $textcreatuser = applyConnectionPlaceholders($textcreatuser, $output_config_link, $config);
+        if (intval($get_invoice['Volume']) == 0) {
+            $textcreatuser = str_replace('گیگابایت', "", $textcreatuser);
+        }
         if ($marzban_list_get['type'] == "Manualsale") {
             $textcreatuser = str_replace('{password}', $dataoutput['subscription_url'], $textcreatuser);
             update("invoice", "user_info", $dataoutput['subscription_url'], "id_invoice", $get_invoice['id_invoice']);
@@ -2200,9 +2567,9 @@ function DirectPayment($order_id, $image = 'images.jpg')
         if ($affiliateCommissionPaid !== null) {
             $result = number_format($affiliateCommissionPaid);
             $dateacc = date('Y/m/d H:i:s');
-            $textadd = "🎁  پرداخت پورسانت
+            $textadd = faoxima_render_text(faoxima_textbot_get('dyn_purchase_affiliate_commission_user_tpl', "🎁  پرداخت پورسانت
 
-        مبلغ $result تومان به حساب شما از طرف  زیر مجموعه تان به کیف پول شما واریز گردید";
+        مبلغ {amount} تومان به حساب شما از طرف  زیر مجموعه تان به کیف پول شما واریز گردید"), ['amount' => $result]);
             $textreportport = "
 مبلغ $result به کاربر {$Balance_id['affiliates']} برای پورسانت از کاربر {$Balance_id['id']} واریز گردید
 <blockquote>تایم : $dateacc</blockquote>";
@@ -2237,10 +2604,12 @@ function DirectPayment($order_id, $image = 'images.jpg')
         $balanceformatsell = select("user", "Balance", "id", $get_invoice['id_user'], "select")['Balance'];
         $balanceformatsell = number_format($balanceformatsell, 0);
         $balancebefore = number_format($Balance_id['Balance'], 0);
+        $rxFmtInvoicePriceProduct = rxFormatToman($get_invoice['price_product']);
+        $rxFmtPaymentReportPrice = rxFormatToman($Payment_report['price']);
         $timejalali = jdate('Y/m/d H:i:s');
         $textonebuy = "";
         if ($countinvoice == 1) {
-            $textonebuy = "📌 خرید اول کاربر";
+            $textonebuy = faoxima_textbot_get('dyn_purchase_first_buy_flag', "📌 خرید اول کاربر");
         }
         // [fallback] اگه textbotlang در cron context کامل لود نشده، text رو با مقدار default پر کن تا تلگرام reject نکنه
         $__mngBtnText = '👤 مدیریت کاربر';
@@ -2269,17 +2638,17 @@ $textonebuy
 <blockquote>▫️کد پیگیری: {$get_invoice['id_invoice']}</blockquote>
 <blockquote>▫️نوع کاربر : {$Balance_id['agent']}</blockquote>
 <blockquote>▫️شماره تلفن کاربر : {$Balance_id['number']}</blockquote>
-<blockquote>▫️قیمت محصول : {$get_invoice['price_product']} تومان</blockquote>
-<blockquote>▫️قیمت نهایی : {$Payment_report['price']} تومان</blockquote>
+<blockquote>▫️قیمت محصول : {$rxFmtInvoicePriceProduct} تومان</blockquote>
+<blockquote>▫️قیمت نهایی : {$rxFmtPaymentReportPrice} تومان</blockquote>
 <blockquote>▫️زمان خرید : $timejalali</blockquote>";
         if (strlen($setting['Channel_Report']) > 0) {
-            telegram('sendmessage', [
+            rx_sendTopicReport([
                 'chat_id' => $setting['Channel_Report'],
                 'message_thread_id' => $buyreport,
                 'text' => $text_report,
                 'parse_mode' => "HTML",
                 'reply_markup' => $Response
-            ]);
+            ], ['flow' => 'direct_payment', 'order_id' => (string) ($get_invoice['id_invoice'] ?? ''), 'user_id' => (string) ($Balance_id['id'] ?? '')]);
         }
         if (function_exists('faoxima_public_purchase_log_event')) {
             faoxima_public_purchase_log_event('new_sub', [
@@ -2291,13 +2660,14 @@ $textonebuy
             ], $setting);
         }
         if (intval($setting['scorestatus']) == 1 and !in_array($Balance_id['id'], $admin_ids)) {
-            sendmessage($Balance_id['id'], "📌شما 1 امتیاز جدید کسب کردید.", null, 'html');
+            sendmessage($Balance_id['id'], faoxima_textbot_get('dyn_purchase_score_earned_1', "📌شما 1 امتیاز جدید کسب کردید."), null, 'html');
             $scorenew = $Balance_id['score'] + 1;
             update("user", "score", $scorenew, "id", $Balance_id['id']);
         }
         update("invoice", "Status", "active", "username", $get_invoice['username']);
         if ($Payment_report['Payment_Method'] == "cart to cart" or $Payment_report['Payment_Method'] == "arze digital offline") {
             update("invoice", "Status", "active", "id_invoice", $get_invoice['id_invoice']);
+            $rxFmtBalanceBeforeBuy = rxFormatToman($Balance_id['Balance']);
             $textconfrom = "✅ پرداخت تایید شده
 🛍خرید سرویس
 ▫️نام کاربری کانفیگ :$username_ac
@@ -2305,7 +2675,7 @@ $textonebuy
 👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
 🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
 ⚜️ نام کاربری: @{$Balance_id['username']}
-💎 موجودی قبل خرید  : {$Balance_id['Balance']}
+💎 موجودی قبل خرید  : {$rxFmtBalanceBeforeBuy}
 💸 مبلغ پرداختی: $format_price_cart تومان
 ✍️ توضیحات : {$paymentNote}
 
@@ -2339,8 +2709,8 @@ $textonebuy
             $prodcut['Service_time'] = $service_other['Service_time'];
             $prodcut['Volume_constraint'] = $service_other['volumebuy'];
         } else {
-            $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = '{$nameloc['Service_location']}' OR Location = '/all') AND (agent = '{$Balance_id['agent']}' OR agent = 'all') AND code_product = '$codeproduct'");
-            $stmt->execute();
+            $stmt = $pdo->prepare("SELECT * FROM product WHERE (FIND_IN_SET(:loc, Location) > 0 OR Location = '/all') AND (agent = '{$Balance_id['agent']}' OR agent = 'all') AND code_product = '$codeproduct'");
+            $stmt->execute([':loc' => (string) $nameloc['Service_location']]);
             $prodcut = $stmt->fetch(PDO::FETCH_ASSOC);
         }
         if (!is_array($prodcut)) {
@@ -2382,6 +2752,13 @@ $textonebuy
             if (function_exists('nmStockDeliverConfig')) nmStockDeliverConfig($stockNew, $invoiceNew, '✅ تمدید سرویس از انبار شبکه‌ملی با موفقیت انجام شد');
             $extend = ['status' => true, 'stock' => true];
         } else {
+            $ManagePanel = rxEnsureManagePanel();
+            if (!is_object($ManagePanel)) {
+                if (function_exists('rx_log_event')) {
+                    rx_log_event('DIRECT_PAYMENT_NO_MANAGE_PANEL', 'ManagePanel unavailable; extend aborted without side effects', ['id_order' => $order_id]);
+                }
+                return;
+            }
             $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
             $Balance_Low_user = 0;
             update("user", "Balance", $Balance_Low_user, "id", $Balance_id['id']);
@@ -2393,14 +2770,14 @@ $textonebuy
                 wallet_ledger_record($Balance_id['id'], 'credit', $Payment_report['price'], 'refund', 'بازگشت وجه - خطا در تمدید سرویس', (string)$Payment_report['id_order'], 'invoice', (string)($nameloc['id_invoice'] ?? ''));
             }
             sendmessage($Balance_id['id'], $textbotlang['users']['sell']['ErrorConfig'], $keyboard, 'HTML');
-            sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل تمدید نشدن سرویس مبلغ $balance تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
+            sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل تمدید نشدن سرویس مبلغ " . rxFormatToman($balance) . " تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
             $extend['msg'] = json_encode($extend['msg']);
             $textreports = "
         خطای تمدید سرویس
 <blockquote>نام پنل : {$marzban_list_get['name_panel']}</blockquote>
 <blockquote>نام کاربری سرویس : {$nameloc['username']}</blockquote>
 <blockquote>دلیل خطا : {$extend['msg']}</blockquote>";
-            $rxTopupExtendMsg = "❌خطایی در تمدید سرویس رخ داده با پشتیبانی در ارتباط باشید";
+            $rxTopupExtendMsg = faoxima_textbot_get('dyn_errors_renewal_support_error', "❌خطایی در تمدید سرویس رخ داده با پشتیبانی در ارتباط باشید");
             if (($extend['code'] ?? '') === 'manual_stock_empty') {
                 $rxTopupExtendMsg = "❌ موجودی انبار برای این محصول تمام شده است.";
             } elseif (($extend['code'] ?? '') === 'queued_renewal_exists') {
@@ -2418,6 +2795,7 @@ $textonebuy
             return;
         }
         }
+        update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
 
         MiniDiscount::logSale([
             'id_user' => $Balance_id['id'],
@@ -2468,10 +2846,12 @@ $textonebuy
             || rx_shopCashbackEligible("chashbackextend", $Balance_id['register'] ?? null, "getextenduser", $Balance_id['id'] ?? null, $Payment_report['id_order'] ?? null);
         if ($renewCashbackEligible && intval($valurcashbackextend) != 0) {
             $result = ($prodcut['price_product'] * $valurcashbackextend) / 100;
-            $pricelastextend = $result;
-            update("user", "Balance", $pricelastextend, "id", $Balance_id['id']);
+            $__renewCashbackOk = balance_atomic_credit($Balance_id['id'], $result);
+            if ($__renewCashbackOk && function_exists('wallet_ledger_record')) {
+                wallet_ledger_record($Balance_id['id'], 'credit', $result, 'cashback', 'هدیه بازگشت وجه تمدید سرویس', (string)($Payment_report['id_order'] ?? ''), 'invoice', (string)($nameloc['id_invoice'] ?? ''));
+            }
             sendmessage($Balance_id['id'], "تبریک 🎉
-📌 به عنوان هدیه تمدید مبلغ $result تومان حساب شما شارژ گردید", null, 'HTML');
+📌 به عنوان هدیه تمدید مبلغ " . rxFormatToman($result) . " تومان حساب شما شارژ گردید", null, 'HTML');
         }
         $priceproductformat = number_format($prodcut['price_product']);
         if (!empty($extend['queued'])) {
@@ -2492,7 +2872,7 @@ $textonebuy
         }
         sendmessage($Balance_id['id'], $textextend, $keyboardextendfnished, 'HTML');
         if (intval($setting['scorestatus']) == 1 and !in_array($Balance_id['id'], $admin_ids)) {
-            sendmessage($Balance_id['id'], "📌شما 2 امتیاز جدید کسب کردید.", null, 'html');
+            sendmessage($Balance_id['id'], faoxima_textbot_get('dyn_purchase_score_earned_2', "📌شما 2 امتیاز جدید کسب کردید."), null, 'html');
             $scorenew = $Balance_id['score'] + 2;
             update("user", "score", $scorenew, "id", $Balance_id['id']);
         }
@@ -2529,6 +2909,7 @@ $textonebuy
         update("invoice", "Status", "active", "id_invoice", $nameloc['id_invoice']);
         if ($Payment_report['Payment_Method'] == "cart to cart" or $Payment_report['Payment_Method'] == "arze digital offline") {
 
+            $rxFmtBalanceBeforeExtend = rxFormatToman($Balance_id['Balance']);
             $textconfrom = "✅ پرداخت تایید شده
 🔋 تمدید سرویس
 🪪 نام کاربری کانفیگ : $usernamepanel
@@ -2537,7 +2918,7 @@ $textonebuy
 👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
 🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
 ⚜️ نام کاربری: @{$Balance_id['username']}
-💎 موجودی قبل تمدید  : {$Balance_id['Balance']}
+💎 موجودی قبل تمدید  : {$rxFmtBalanceBeforeExtend}
 💸 مبلغ پرداختی: $format_price_cart تومان
 ✍️ توضیحات : {$paymentNote}
 
@@ -2553,6 +2934,13 @@ $textonebuy
         $inboundid = $marzban_list_get['inboundid'];
         if ($nameloc['inboundid'] != null) {
             $inboundid = $nameloc['inboundid'];
+        }
+        $ManagePanel = rxEnsureManagePanel();
+        if (!is_object($ManagePanel)) {
+            if (function_exists('rx_log_event')) {
+                rx_log_event('DIRECT_PAYMENT_NO_MANAGE_PANEL', 'ManagePanel unavailable; extra volume aborted without side effects', ['id_order' => $order_id]);
+            }
+            return;
         }
         update("user", "Balance", $Balance_Low_user, "id", $Balance_id['id']);
         $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $steppay[0]);
@@ -2570,7 +2958,7 @@ $textonebuy
 <blockquote>نام پنل : {$marzban_list_get['name_panel']}</blockquote>
 <blockquote>نام کاربری سرویس : {$nameloc['username']}</blockquote>
 <blockquote>دلیل خطا : {$extra_volume['msg']}</blockquote>";
-            sendmessage($nameloc['id_user'], "❌خطایی در خرید حجم اضافه سرویس رخ داده با پشتیبانی در ارتباط باشید", null, 'HTML');
+            sendmessage($nameloc['id_user'], faoxima_textbot_get('dyn_errors_extra_volume_purchase_error', "❌خطایی در خرید حجم اضافه سرویس رخ داده با پشتیبانی در ارتباط باشید"), null, 'HTML');
             if (strlen($setting['Channel_Report']) > 0) {
                 telegram('sendmessage', [
                     'chat_id' => $setting['Channel_Report'],
@@ -2581,6 +2969,7 @@ $textonebuy
             }
             return;
         }
+        update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
         MiniDiscount::logSale([
             'id_user' => $Balance_id['id'],
             'id_invoice' => $nameloc['id_invoice'] ?? null,
@@ -2607,8 +2996,9 @@ $textonebuy
             ]
         ]);
         $volumesformat = number_format($Payment_report['price'], 0);
+        $rxFmtBalanceBeforeVolume = rxFormatToman($Balance_id['Balance']);
         if (intval($setting['scorestatus']) == 1 and !in_array($Balance_id['id'], $admin_ids)) {
-            sendmessage($Balance_id['id'], "📌شما 1 امتیاز جدید کسب کردید.", null, 'html');
+            sendmessage($Balance_id['id'], faoxima_textbot_get('dyn_purchase_score_earned_1', "📌شما 1 امتیاز جدید کسب کردید."), null, 'html');
             $scorenew = $Balance_id['score'] + 1;
             update("user", "score", $scorenew, "id", $Balance_id['id']);
         }
@@ -2628,7 +3018,7 @@ $textonebuy
 👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
 🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
 ⚜️ نام کاربری: @{$Balance_id['username']}
-💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
+💎 موجودی قبل ازافزایش موجودی : {$rxFmtBalanceBeforeVolume}
 💸 مبلغ پرداختی: $format_price_cart تومان
 ";
             Editmessagetext($_receipt_chat_id, $message_id, $textconfrom, $Confirm_pay, 'HTML', $_receipt_report_thread > 0 ? $_receipt_report_thread : null);
@@ -2638,9 +3028,9 @@ $textonebuy
 
 <blockquote>🪪 آیدی عددی : {$Balance_id['id']}</blockquote>
 <blockquote>🛍 حجم خریداری شده  : $volumes گیگ</blockquote>
-<blockquote>💰 مبلغ پرداختی : {$Payment_report['price']} تومان</blockquote>
+<blockquote>💰 مبلغ پرداختی : " . rxFormatToman($Payment_report['price']) . " تومان</blockquote>
 <blockquote>👤 نام کاربری کانفیگ {$steppay[0]}</blockquote>
-<blockquote>موجودی کاربر قبل خرید : {$Balance_id['Balance']}</blockquote>";
+<blockquote>موجودی کاربر قبل خرید : {$rxFmtBalanceBeforeVolume}</blockquote>";
         if (strlen($setting['Channel_Report']) > 0) {
             telegram('sendmessage', [
                 'chat_id' => $setting['Channel_Report'],
@@ -2666,6 +3056,13 @@ $textonebuy
         if ($nameloc['inboundid'] != false) {
             $inboundid = $nameloc['inboundid'];
         }
+        $ManagePanel = rxEnsureManagePanel();
+        if (!is_object($ManagePanel)) {
+            if (function_exists('rx_log_event')) {
+                rx_log_event('DIRECT_PAYMENT_NO_MANAGE_PANEL', 'ManagePanel unavailable; extra time aborted without side effects', ['id_order' => $order_id]);
+            }
+            return;
+        }
         update("user", "Balance", $Balance_Low_user, "id", $nameloc['id_user']);
         $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $steppay[0]);
         $data_for_database = json_encode(array(
@@ -2684,7 +3081,7 @@ $textonebuy
 <blockquote>نام پنل : {$marzban_list_get['name_panel']}</blockquote>
 <blockquote>نام کاربری سرویس : {$nameloc['username']}</blockquote>
 <blockquote>دلیل خطا : {$extra_time['msg']}</blockquote>";
-            sendmessage($from_id, "❌خطایی در خرید حجم اضافه سرویس رخ داده با پشتیبانی در ارتباط باشید", null, 'HTML');
+            sendmessage($from_id, faoxima_textbot_get('dyn_errors_extra_volume_purchase_error', "❌خطایی در خرید حجم اضافه سرویس رخ داده با پشتیبانی در ارتباط باشید"), null, 'HTML');
             if (strlen($setting['Channel_Report']) > 0) {
                 telegram('sendmessage', [
                     'chat_id' => $setting['Channel_Report'],
@@ -2695,6 +3092,7 @@ $textonebuy
             }
             return;
         }
+        update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
         MiniDiscount::logSale([
             'id_user' => $Balance_id['id'],
             'id_invoice' => $nameloc['id_invoice'] ?? null,
@@ -2721,13 +3119,14 @@ $textonebuy
             ]
         ]);
         $volumesformat = number_format($Payment_report['price']);
+        $rxFmtBalanceBeforeTime = rxFormatToman($Balance_id['Balance']);
         if (intval($setting['scorestatus']) == 1 and !in_array($Balance_id['id'], $admin_ids)) {
-            sendmessage($Balance_id['id'], "📌شما 1 امتیاز جدید کسب کردید.", null, 'html');
+            sendmessage($Balance_id['id'], faoxima_textbot_get('dyn_purchase_score_earned_1', "📌شما 1 امتیاز جدید کسب کردید."), null, 'html');
             $scorenew = $Balance_id['score'] + 1;
             update("user", "score", $scorenew, "id", $Balance_id['id']);
         }
         $textextratime = "✅ افزایش زمان برای سرویس شما با موفقیت صورت گرفت
- 
+
 ▫️نام سرویس : {$steppay[0]}
 ▫️زمان اضافه : $tmieextra روز
 
@@ -2742,7 +3141,7 @@ $textonebuy
 👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
 🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
 ⚜️ نام کاربری: @{$Balance_id['username']}
-💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
+💎 موجودی قبل ازافزایش موجودی : {$rxFmtBalanceBeforeTime}
 💸 مبلغ پرداختی: $format_price_cart تومان
 ";
             Editmessagetext($_receipt_chat_id, $message_id, $textconfrom, $Confirm_pay, 'HTML', $_receipt_report_thread > 0 ? $_receipt_report_thread : null);
@@ -2752,7 +3151,7 @@ $textonebuy
 
 <blockquote>🪪 آیدی عددی : {$Balance_id['id']}</blockquote>
 <blockquote>🛍 زمان خریداری شده  : $volumes روز</blockquote>
-<blockquote>💰 مبلغ پرداختی : {$Payment_report['price']} تومان</blockquote>
+<blockquote>💰 مبلغ پرداختی : " . rxFormatToman($Payment_report['price']) . " تومان</blockquote>
 <blockquote>👤 نام کاربری کانفیگ {$steppay[0]}</blockquote>";
         if (strlen($setting['Channel_Report']) > 0) {
             telegram('sendmessage', [
@@ -2774,7 +3173,7 @@ $textonebuy
         $__paidAmount = intval($Payment_report['price']);
         $__creditAmount = $__paidAmount + $__chargeBonus;
         $Balance_confrim = intval($Balance_id['Balance']) + $__creditAmount;
-        $rxClaimCharge = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'paid' WHERE id_order = :o AND payment_Status <> 'paid'");
+        $rxClaimCharge = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'paid', direct_payment_done = 1 WHERE id_order = :o AND direct_payment_done IS NULL");
         $rxClaimCharge->execute([':o' => $Payment_report['id_order']]);
         if ($rxClaimCharge->rowCount() < 1) {
             return;
@@ -2814,13 +3213,14 @@ $textonebuy
         }
         $format_price_cart = number_format($__paidAmount, 0);
         if ($Payment_report['Payment_Method'] == "cart to cart" or $Payment_report['Payment_Method'] == "arze digital offline") {
+            $rxFmtBalanceBeforeTopup = rxFormatToman($Balance_id['Balance']);
             $textconfrom = "⭕️ یک پرداخت جدید انجام شده است
 افزایش موجودی.
 👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
 🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
 ⚜️ نام کاربری: @{$Balance_id['username']}
 💸 مبلغ پرداختی: $format_price_cart تومان
-💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
+💎 موجودی قبل ازافزایش موجودی : {$rxFmtBalanceBeforeTopup}
 ✍️ توضیحات : {$paymentNote}";
             Editmessagetext($_receipt_chat_id, $message_id, $textconfrom, $Confirm_pay, 'HTML', $_receipt_report_thread > 0 ? $_receipt_report_thread : null);
         }

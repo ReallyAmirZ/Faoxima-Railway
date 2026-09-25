@@ -1,2 +1,3 @@
 FAOXIMA_DOCKER_ENV=1
-* * * * * root cd /var/www/faoxima && runuser -u www-data -- php cron/cron.php >>/proc/1/fd/1 2>>/proc/1/fd/2
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * root cd /var/www/faoxima && /usr/sbin/runuser -u www-data -- /usr/local/bin/php cron/cron.php >>/proc/1/fd/1 2>>/proc/1/fd/2

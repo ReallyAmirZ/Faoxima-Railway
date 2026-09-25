@@ -509,6 +509,11 @@ if ($bootstrapLoaded && function_exists('getCronJobDefinitions')) {
         if (empty($definition['script'])) {
             continue;
         }
+        // Some upstream definitions outlive the optional gateway file (e.g. iranpay1).
+        // Do not repeatedly dispatch HTTP/CLI requests to a script that is absent.
+        if (!is_file(__DIR__ . '/../cronbot/' . ltrim($definition['script'], '/'))) {
+            continue;
+        }
 
         $defaultConfig = $definition['default'] ?? ['unit' => 'minute', 'value' => 1];
         $schedule      = $schedules[$key] ?? $defaultConfig;
@@ -711,4 +716,3 @@ if (!$rxIsCli && !empty($dueTasks)) {
 
 $rxDispatchedTotal = $rxSuccessfulDispatches;
 echo "OK " . date('Y-m-d H:i:s') . " (Asia/Tehran) | dispatched=" . $rxDispatchedTotal . "\n";
-

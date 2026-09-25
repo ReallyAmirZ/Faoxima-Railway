@@ -51,6 +51,8 @@ COPY docker/faoxima.cron /etc/cron.d/faoxima
 COPY docker/railway-entrypoint.sh /usr/local/bin/railway-entrypoint.sh
 
 RUN chmod 0644 /etc/cron.d/faoxima \
+    && test -x /usr/sbin/runuser \
+    && test -x /usr/local/bin/php \
     && chmod +x /usr/local/bin/railway-entrypoint.sh \
     && mkdir -p /var/www/faoxima/logs /var/www/faoxima/storage/cache /var/www/faoxima/storage/private /var/www/faoxima/cronbot/.runtime \
     && chown -R www-data:www-data /var/www/faoxima

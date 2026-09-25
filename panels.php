@@ -114,7 +114,7 @@ class ManagePanel
         if ($Get_Data_Panel['type'] == "marzban") {
 
             $ConnectToPanel = adduser($Get_Data_Panel['name_panel'], $data_limit, $usernameC, $expire, $note, $Get_Data_Product['data_limit_reset'], $Get_Data_Product['name_product']);
-            if (!empty($ConnectToPanel['status']) && (int)$ConnectToPanel['status'] !== 200) {
+            if (!in_array((int) ($ConnectToPanel['status'] ?? 0), [200, 201], true)) {
                 return array(
                     'status' => 'Unsuccessful',
                     'msg' => $ConnectToPanel['status']
@@ -126,7 +126,14 @@ class ManagePanel
                     'msg' => $ConnectToPanel['error']
                 );
             }
-            $data_Output = json_decode($ConnectToPanel['body'], true);
+            $data_Output = json_decode((string) ($ConnectToPanel['body'] ?? ''), true);
+            if (!is_array($data_Output) || !is_string($data_Output['username'] ?? null) || trim($data_Output['username']) === '') {
+                return ['status' => 'Unsuccessful', 'msg' => $data_Output['detail'] ?? 'Panel response did not contain a valid created username.'];
+            }
+            $data_Output['subscription_url'] = is_string($data_Output['subscription_url'] ?? null) ? $data_Output['subscription_url'] : '';
+            $data_Output['links'] = is_array($data_Output['links'] ?? null)
+                ? $data_Output['links']
+                : (is_string($data_Output['links'] ?? null) ? preg_split('/\r?\n/', trim($data_Output['links'])) : []);
             if (!empty($data_Output['detail']) && $data_Output['detail']) {
                 $Output['status'] = 'Unsuccessful';
                 if ($data_Output['detail']) {
@@ -140,10 +147,17 @@ class ManagePanel
                 }
                 if ((string)($Get_Data_Panel['version_panel'] ?? '0') === '1') {
                     $out_put_link = outputlunk($data_Output['subscription_url']);
-                    if (isBase64($out_put_link)) {
-                        $data_Output['links'] = base64_decode(outputlunk($data_Output['subscription_url']));
+                    if (is_string($out_put_link) && trim($out_put_link) !== '') {
+                        $decodedLinks = isBase64($out_put_link) ? base64_decode($out_put_link, true) : $out_put_link;
+                        if (is_string($decodedLinks) && trim($decodedLinks) !== '') {
+                            $candidateLinks = array_values(array_filter(preg_split('/\r?\n/', trim($decodedLinks)), static function ($link) {
+                                return preg_match('~^[a-z][a-z0-9+.-]*://~i', trim($link)) === 1;
+                            }));
+                            if ($candidateLinks !== []) {
+                                $data_Output['links'] = $candidateLinks;
+                            }
+                        }
                     }
-                    $data_Output['links'] = explode("\n", $data_Output['links']);
                 }
                 if ($inoice != false) {
                     $data_Output['subscription_url'] = "https://$domainhosts/sub/" . $inoice['id_invoice'];
@@ -155,7 +169,7 @@ class ManagePanel
             }
         } elseif ($Get_Data_Panel['type'] == "pasarguard") {
             $ConnectToPanel = pasarguardAddUser($Get_Data_Panel['name_panel'], $data_limit, $usernameC, $expire, $note, $Get_Data_Product['data_limit_reset'], $Get_Data_Product['name_product']);
-            if (!empty($ConnectToPanel['status']) && (int)$ConnectToPanel['status'] !== 201) {
+            if (!in_array((int) ($ConnectToPanel['status'] ?? 0), [200, 201], true)) {
                 return array(
                     'status' => 'Unsuccessful',
                     'msg' => $ConnectToPanel['status']
@@ -167,7 +181,11 @@ class ManagePanel
                     'msg' => $ConnectToPanel['error']
                 );
             }
-            $data_Output = json_decode($ConnectToPanel['body'], true);
+            $data_Output = json_decode((string) ($ConnectToPanel['body'] ?? ''), true);
+            if (!is_array($data_Output) || !is_string($data_Output['username'] ?? null) || trim($data_Output['username']) === '') {
+                return ['status' => 'Unsuccessful', 'msg' => $data_Output['detail'] ?? 'Panel response did not contain a valid created username.'];
+            }
+            $data_Output['subscription_url'] = is_string($data_Output['subscription_url'] ?? null) ? $data_Output['subscription_url'] : '';
             if (!empty($data_Output['detail']) && $data_Output['detail']) {
                 $Output['status'] = 'Unsuccessful';
                 $Output['msg'] = $data_Output['detail'];
@@ -202,13 +220,16 @@ class ManagePanel
                     'status' => 'Unsuccessful',
                     'msg' => $data_Output['error']
                 );
-            } elseif (!empty($data_Output['status']) && $data_Output['status'] != 200) {
+            } elseif (!in_array((int) ($data_Output['status'] ?? 0), [200, 201], true)) {
                 return array(
                     'status' => 'Unsuccessful',
                     'msg' => $data_Output['status']
                 );
             } else {
-                $data_Output = json_decode($data_Output['body'], true);
+                $data_Output = json_decode((string) ($data_Output['body'] ?? ''), true);
+                if (!is_array($data_Output) || !array_key_exists('success', $data_Output)) {
+                    return ['status' => 'Unsuccessful', 'msg' => 'Invalid client creation response from X-UI.'];
+                }
                 if (!$data_Output['success']) {
                     $Output['status'] = 'Unsuccessful';
                     $Output['msg'] = $data_Output['msg'];
@@ -2640,5 +2661,4 @@ class ManagePanel
         return $extra_time;
     }
 }
-
 

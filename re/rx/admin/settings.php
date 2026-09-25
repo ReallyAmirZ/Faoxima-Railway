@@ -628,11 +628,23 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
             return;
         }
 
-        $stmtBalance = $pdo->prepare("UPDATE user SET Balance = Balance + :amount WHERE id = :id");
-        $stmtBalance->execute([
-            ':amount' => intval($setting['agentreqprice']),
-            ':id' => $id_user,
-        ]);
+        $rxAgentRefund = intval($setting['agentreqprice']);
+        if ($rxAgentRefund > 0) {
+            $stmtBalance = $pdo->prepare("UPDATE user SET Balance = Balance + :amount WHERE id = :id");
+            $stmtBalance->execute([
+                ':amount' => $rxAgentRefund,
+                ':id' => $id_user,
+            ]);
+            if ($stmtBalance->rowCount() < 1) {
+                throw new RuntimeException('agent request refund affected no user row');
+            }
+            if (function_exists('clearSelectCacheRow')) {
+                clearSelectCacheRow('user', 'id', $id_user);
+            }
+            if (!wallet_ledger_record($id_user, 'credit', $rxAgentRefund, 'refund', 'بازگشت هزینه درخواست نمایندگی', null, 'Requestagent', (string) $id_user)) {
+                throw new RuntimeException('agent request refund ledger failed');
+            }
+        }
 
         $pdo->commit();
     } catch (Throwable $e) {
@@ -1844,7 +1856,7 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
         $datatextbot['textafterpay'] = $panel['type'] == "WGDashboard" ? $datatextbot['text_wgdashboard'] : $datatextbot['textafterpay'];
         if (intval($text) == 0)
             $text = $textbotlang['users']['stateus']['Unlimited'];
-        $textcreatuser = str_replace('{username}', "<code>{$dataoutput['username']}</code>", $datatextbot['textafterpay']);
+        $textcreatuser = str_replace('{username}', "<code>" . guardDisplayUsername($dataoutput['username'], $panel) . "</code>", $datatextbot['textafterpay']);
         $textcreatuser = str_replace('{name_service}', "پلن دلخواه", $textcreatuser);
         $textcreatuser = str_replace('{location}', $panel['name_panel'], $textcreatuser);
         $textcreatuser = str_replace('{day}', $text, $textcreatuser);

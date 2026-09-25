@@ -553,6 +553,147 @@ function rxRenderPremiumEmojiPanel($from_id, $page = 1) {
         }
     }
 }
+
+function rxPremiumEmojiInputSteps() {
+    return ['premium_emoji_get_char', 'premium_emoji_get_id', 'premium_emoji_edit_id'];
+}
+
+function rxPremiumEmojiCancelKind($text, $datain) {
+    global $textbotlang;
+    $cb = is_string($datain) ? trim($datain) : '';
+    if ($cb !== '') {
+        if (in_array($cb, ['adm_hub_main', 'backadmin', 'admin'], true)) {
+            return 'admin';
+        }
+        if (in_array($cb, ['backmenu', 'adm_backmenu', 'premium_emoji_settings'], true)
+            || preg_match('/^premium_emoji_settings_\d+$/', $cb)) {
+            return 'panel';
+        }
+        return 'leave';
+    }
+    $raw = is_string($text) ? trim($text) : '';
+    if ($raw === '') {
+        return null;
+    }
+    $backAdmin = (string)($textbotlang['Admin']['backadmin'] ?? '🏠 بازگشت به منوی مدیریت');
+    $backMenu  = (string)($textbotlang['Admin']['backmenu'] ?? '▶️ بازگشت به منوی قبل');
+    if ($raw === $backAdmin) {
+        return 'admin';
+    }
+    if ($raw === $backMenu) {
+        return 'panel';
+    }
+    $clean = function_exists('rx_cleanEmojiAndSymbols') ? rx_cleanEmojiAndSymbols($raw) : mb_strtolower($raw, 'UTF-8');
+    if ($clean === '') {
+        return null;
+    }
+    if (in_array($clean, [
+        'بازگشت به منوی مدیریت', 'بازگشت به منوی اصلی', 'بازگشت به منو اصلی', 'بازگشت به خانه',
+        'بازگشت به ادمین', 'بازگشت به پنل مدیریت', 'بازگشت به پنل ادمین', 'منوی مدیریت', 'منوی اصلی', 'خانه',
+    ], true)) {
+        return 'admin';
+    }
+    if (in_array($clean, [
+        'لغو', 'انصراف', 'بازگشت', 'بازگشت به منوی قبل', 'بازگشت به منو قبل', 'بازگشت به قبل', 'منوی قبل', 'منو قبل',
+        'cancel', '/cancel', 'back',
+    ], true)) {
+        return 'panel';
+    }
+    return null;
+}
+
+function rxPremiumEmojiResetState($from_id) {
+    if (function_exists('update')) {
+        update("user", "Processing_value", "0", "id", $from_id);
+    }
+    if (function_exists('step')) {
+        step('home', $from_id);
+    }
+}
+
+function rxPremiumEmojiIsValidBase($value) {
+    if (!is_string($value)) {
+        return false;
+    }
+    $value = trim($value);
+    if ($value === '' || mb_strlen($value, 'UTF-8') > 16) {
+        return false;
+    }
+    if (preg_match('/[\s\x{00A0}\x{2000}-\x{200B}\x{2028}\x{2029}\x{3000}]/u', $value)) {
+        return false;
+    }
+    if (preg_match('/\p{L}/u', $value)) {
+        return false;
+    }
+    if (function_exists('isValidPremiumEmojiSource') && !isValidPremiumEmojiSource($value)) {
+        return false;
+    }
+    return (bool) preg_match('/[\x{1F000}-\x{1FAFF}\x{2190}-\x{21FF}\x{2300}-\x{23FF}\x{25A0}-\x{27BF}\x{2900}-\x{297F}\x{2B00}-\x{2BFF}\x{3030}\x{303D}\x{3297}\x{3299}\x{203C}\x{2049}\x{2122}\x{2139}\x{20E3}]/u', $value);
+}
+
+function rxPremiumEmojiExtractCustomId(array $message) {
+    $fromEntities = function ($entities) {
+        if (!is_array($entities)) {
+            return '';
+        }
+        foreach ($entities as $ent) {
+            if (is_array($ent) && ($ent['type'] ?? '') === 'custom_emoji' && !empty($ent['custom_emoji_id'])) {
+                $cid = trim((string)$ent['custom_emoji_id']);
+                if ($cid !== '' && ctype_digit($cid) && strlen($cid) <= 30) {
+                    return $cid;
+                }
+            }
+        }
+        return '';
+    };
+    $fromSticker = function ($sticker) {
+        if (is_array($sticker) && ($sticker['type'] ?? '') === 'custom_emoji' && !empty($sticker['custom_emoji_id'])) {
+            $cid = trim((string)$sticker['custom_emoji_id']);
+            if ($cid !== '' && ctype_digit($cid) && strlen($cid) <= 30) {
+                return $cid;
+            }
+        }
+        return '';
+    };
+
+    $cid = $fromEntities($message['entities'] ?? null);
+    if ($cid === '') {
+        $cid = $fromEntities($message['caption_entities'] ?? null);
+    }
+    if ($cid === '') {
+        $cid = $fromSticker($message['sticker'] ?? null);
+    }
+    if ($cid === '') {
+        $reply = $message['reply_to_message'] ?? null;
+        if (is_array($reply)) {
+            $cid = $fromEntities($reply['entities'] ?? null);
+            if ($cid === '') {
+                $cid = $fromEntities($reply['caption_entities'] ?? null);
+            }
+            if ($cid === '') {
+                $cid = $fromSticker($reply['sticker'] ?? null);
+            }
+        }
+    }
+    if ($cid === '') {
+        $candidate = trim((string)($message['text'] ?? $message['caption'] ?? ''));
+        if ($candidate !== '' && ctype_digit($candidate) && strlen($candidate) >= 8 && strlen($candidate) <= 30) {
+            $cid = $candidate;
+        }
+    }
+    return $cid;
+}
+
+function rxPremiumEmojiIsDuplicateError($e) {
+    if ($e instanceof PDOException) {
+        $info = $e->errorInfo;
+        if (is_array($info) && isset($info[1]) && (int)$info[1] === 1062) {
+            return true;
+        }
+    }
+    $msg = (string)$e->getMessage();
+    return stripos($msg, 'Duplicate') !== false || strpos($msg, '1062') !== false;
+}
 if (!function_exists('crypto_supported_currencies')) {
     function crypto_supported_currencies(): array
     {
@@ -881,11 +1022,38 @@ if (!function_exists('cm_apply_payment')) {
             return;
         }
 
-        $userRow = function_exists('select') ? select('user', '*', 'id', $payment['id_user'], 'select') : null;
-        $oldBalance = is_array($userRow) ? (int) ($userRow['Balance'] ?? 0) : 0;
-        $newBalance = $oldBalance + $finalIrr;
+        $userRow = function_exists('select') ? select('user', '*', 'id', $payment['id_user'], 'select', ['cache' => false]) : null;
+        if (!function_exists('balance_atomic_credit') || !balance_atomic_credit($payment['id_user'], $finalIrr)) {
+            try {
+                $release = $pdo->prepare("UPDATE Payment_report SET payment_Status = :s WHERE id_order = :id AND payment_Status = 'paid'");
+                $release->execute([':s' => (string) ($payment['payment_Status'] ?? 'waiting'), ':id' => $orderId]);
+            } catch (Throwable $e) {
+                error_log('[crypto] cm_apply_payment release failed: ' . $e->getMessage());
+            }
+            if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
+            if (function_exists('rx_log_event')) {
+                rx_log_event('WALLET_CREDIT_FAILED', 'cm_apply_payment wallet credit failed; claim released', [
+                    'id_order' => $orderId,
+                    'id_user' => $payment['id_user'] ?? null,
+                    'amount' => $finalIrr,
+                ]);
+            }
+            if ($callbackQueryId && function_exists('telegram')) {
+                telegram('answerCallbackQuery', [
+                    'callback_query_id' => $callbackQueryId,
+                    'text' => '❌ شارژ کیف پول انجام نشد. دوباره تلاش کنید.',
+                    'show_alert' => true,
+                    'cache_time' => 0,
+                ]);
+            }
+            return;
+        }
+        if (function_exists('wallet_ledger_record')) {
+            wallet_ledger_record($payment['id_user'], 'credit', $finalIrr, 'topup_crypto', (string) ($payment['Payment_Method'] ?? 'crypto'), $orderId);
+        }
+        $balanceRow = function_exists('select') ? select('user', 'Balance', 'id', $payment['id_user'], 'select', ['cache' => false]) : null;
+        $newBalance = is_array($balanceRow) ? (int) ($balanceRow['Balance'] ?? 0) : ((is_array($userRow) ? (int) ($userRow['Balance'] ?? 0) : 0) + $finalIrr);
         if (function_exists('update')) {
-            update('user', 'Balance', $newBalance, 'id', $payment['id_user']);
             update('Payment_report', 'at_updated', date('Y/m/d H:i:s'), 'id_order', $orderId);
         }
 

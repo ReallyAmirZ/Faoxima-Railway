@@ -140,6 +140,31 @@ if (!function_exists('rx_featCategoryRows')) {
     }
 }
 
+if (function_exists('rxPremiumEmojiCancelKind')
+    && ($adminrulecheck['rule'] ?? '') === "administrator"
+    && in_array(isset($rx_pem_entry_step) ? (string) $rx_pem_entry_step : (string) ($user['step'] ?? ''), rxPremiumEmojiInputSteps(), true)) {
+    $rxPemCancelKind = rxPremiumEmojiCancelKind($text ?? '', $datain ?? '');
+    $rxPemStepLeft = !in_array((string) ($user['step'] ?? ''), rxPremiumEmojiInputSteps(), true);
+    if ($rxPemCancelKind !== null || $rxPemStepLeft) {
+        rxPremiumEmojiResetState($from_id);
+        $user['step'] = 'home';
+        $user['Processing_value'] = '0';
+        if ($rxPemCancelKind === 'panel') {
+            $rxPemCancelPage = 1;
+            if (is_string($datain) && preg_match('/^premium_emoji_settings_(\d+)$/', $datain, $rxPemCancelPg)) {
+                $rxPemCancelPage = max(1, (int) $rxPemCancelPg[1]);
+            }
+            unset($rx_pem_entry_step);
+            if (function_exists('rxRenderPremiumEmojiPanel')) {
+                rxRenderPremiumEmojiPanel($from_id, $rxPemCancelPage);
+            }
+            return;
+        }
+    }
+    unset($rxPemCancelKind, $rxPemStepLeft);
+}
+unset($rx_pem_entry_step);
+
 if (in_array($text, $textadmin) || $datain == "admin") {
     if ($datain == "admin")
         deletemessage($from_id, $message_id);
@@ -319,16 +344,6 @@ if (in_array($text, $textadmin) || $datain == "admin") {
         return;
     }
 
-    if (in_array($currentStep, ['premium_emoji_get_char', 'premium_emoji_get_id', 'premium_emoji_edit_id'], true)) {
-        $rxPemNavCbs = ['featcat_main','close_stat','admin_settings','premium_emoji_settings','premium_emoji_noop','premium_emoji_add','premium_emoji_add_single','premium_emoji_add_batch','premium_emoji_batch_continue','premium_emoji_batch_end','premium_emoji_del_all','premium_emoji_del_all_confirm','premium_emoji_scan','run_host_optimizer'];
-        $rxPemIsNav  = !empty($datain) && (in_array((string)$datain, $rxPemNavCbs, true) || strpos((string)$datain, 'premium_emoji_settings_') === 0);
-        if (!$rxPemIsNav) {
-            if (function_exists('rxRenderPremiumEmojiPanel')) {
-                rxRenderPremiumEmojiPanel($from_id, 1);
-            }
-            return;
-        }
-    }
     if (strpos($currentStep, 'get_remna_') === 0 || in_array($currentStep, ["updatetime", "val_usertest", "getlimitnew", "panellimit_getnew", "GetusernameNew", "GeturlNew", "protocolset", "updatemethodusername", "GetNameNew", "getprotocol", "getprotocolremove", "GetpaawordNew", "updateextendmethod", "setpricechangelocation"])) {
         $panelNameBack = function_exists('nmResolvePanelNameForUser') ? nmResolvePanelNameForUser($user) : (string)$user['Processing_value'];
         if ($panelNameBack !== '') {
@@ -3266,19 +3281,21 @@ elseif ($text == "📝 تنظیم متن ربات" && $adminrulecheck['rule'] ==
     }
     step('home', $from_id);
 } elseif ($user['step'] == "premium_emoji_get_char" && $adminrulecheck['rule'] == "administrator") {
+    if (!isset($update['message']) || !is_array($update['message'])) { return; }
     try {
-        $rxPemRawText = is_string($text) ? trim($text) : '';
-        $rxPemSticker = $update['message']['sticker'] ?? null;
+        $rxPemMsg = $update['message'];
+        $rxPemRawText = trim((string)($rxPemMsg['text'] ?? ''));
+        $rxPemSticker = $rxPemMsg['sticker'] ?? null;
 
         $rxPemBase = '';
         if ($rxPemRawText !== '') {
             $rxPemBase = $rxPemRawText;
         } elseif (is_array($rxPemSticker) && !empty($rxPemSticker['emoji'])) {
-            $rxPemBase = (string)$rxPemSticker['emoji'];
+            $rxPemBase = trim((string)$rxPemSticker['emoji']);
         }
 
-        if ($rxPemBase === '' || mb_strlen($rxPemBase, 'UTF-8') > 50) {
-            nm_adminInstantReply($from_id, "❌ ایموجی نامعتبر است.\n\nلطفاً یک <b>ایموجی عادی</b> ارسال کنید (مثل ✅، ❌، 🔥، 💎).", json_encode([
+        if (!rxPremiumEmojiIsValidBase($rxPemBase)) {
+            nm_adminInstantReply($from_id, "❌ ایموجی نامعتبر است.\n\nلطفاً فقط یک <b>ایموجی عادی</b> ارسال کنید (مثل ✅، ❌، 🔥، 💎).\nمتن معمولی، عدد یا چند ایموجی همراه با متن پذیرفته نمی‌شود.", json_encode([
                 'inline_keyboard' => [[['text' => "🔙 لغو", 'callback_data' => "premium_emoji_settings"]]]
             ]), 'HTML');
             return;
@@ -3294,16 +3311,17 @@ elseif ($text == "📝 تنظیم متن ربات" && $adminrulecheck['rule'] ==
         step('premium_emoji_get_id', $from_id);
     } catch (\Throwable $rxPemErr) {
         @error_log('[premium_emoji_get_char] EXCEPTION: ' . $rxPemErr->getMessage() . ' @ ' . $rxPemErr->getFile() . ':' . $rxPemErr->getLine());
+        rxPremiumEmojiResetState($from_id);
         $rxPemErrMsg = htmlspecialchars($rxPemErr->getMessage(), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         nm_adminInstantReply($from_id, "⚠️ <b>خطای داخلی</b>\n\n<code>{$rxPemErrMsg}</code>", json_encode([
             'inline_keyboard' => [[['text' => "🔙 بازگشت", 'callback_data' => "premium_emoji_settings"]]]
         ]), 'HTML');
-        step('home', $from_id);
         return;
     }
 } elseif ($user['step'] == "premium_emoji_get_id" && $adminrulecheck['rule'] == "administrator") {
-    if (!isset($update['message']) && empty($text)) { return; }
+    if (!isset($update['message']) || !is_array($update['message'])) { return; }
     try {
+        $rxPemMsg = $update['message'];
         $rxPemRaw = (string)($user['Processing_value'] ?? '');
         if (strpos($rxPemRaw, 'batch:') === 0) {
             $rxPemMode = 'batch';
@@ -3315,11 +3333,14 @@ elseif ($text == "📝 تنظیم متن ربات" && $adminrulecheck['rule'] ==
             $rxPemMode = 'single';
             $rxPemBase = $rxPemRaw;
         }
-        if ($rxPemBase === '') {
-            nm_adminInstantReply($from_id, "❌ ایموجی پایه یافت نشد. دوباره از ابتدا شروع کنید.", json_encode([
-                'inline_keyboard' => [[['text' => "🔙 بازگشت", 'callback_data' => "premium_emoji_settings"]]]
+        if (!rxPremiumEmojiIsValidBase($rxPemBase)) {
+            rxPremiumEmojiResetState($from_id);
+            nm_adminInstantReply($from_id, "❌ ایموجی پایه معتبر یافت نشد. لطفاً دوباره از ابتدا شروع کنید.", json_encode([
+                'inline_keyboard' => [
+                    [['text' => "➕ افزودن ایموجی جدید", 'callback_data' => "premium_emoji_add"]],
+                    [['text' => "🔙 بازگشت", 'callback_data' => "premium_emoji_settings"]],
+                ]
             ]), 'HTML');
-            step('home', $from_id);
             return;
         }
 
@@ -3329,73 +3350,25 @@ elseif ($text == "📝 تنظیم متن ربات" && $adminrulecheck['rule'] ==
             $rxPemTableOk = ($rxPemCheck && $rxPemCheck->fetchColumn() !== false);
         } catch (\Throwable $rxPemTblErr) { $rxPemTableOk = false; }
         if (!$rxPemTableOk) {
+            rxPremiumEmojiResetState($from_id);
             nm_adminInstantReply($from_id, "❌ <b>جدول دیتابیس آماده نیست</b>\n\nقبل از این، باید <code>table.php</code> را در مرورگر اجرا کنید.", json_encode([
                 'inline_keyboard' => [[['text' => "🔙 بازگشت", 'callback_data' => "premium_emoji_settings"]]]
             ]), 'HTML');
-            step('home', $from_id);
             return;
         }
 
-        $rxPemCid = '';
-
-        $rxPemEntities = $update['message']['entities'] ?? $update['message']['caption_entities'] ?? [];
-        if (is_array($rxPemEntities)) {
-            foreach ($rxPemEntities as $rxPemEnt) {
-                if (($rxPemEnt['type'] ?? '') === 'custom_emoji' && !empty($rxPemEnt['custom_emoji_id'])) {
-                    $rxPemCid = (string)$rxPemEnt['custom_emoji_id'];
-                    break;
-                }
-            }
-        }
-
-        if ($rxPemCid === '') {
-            $rxPemSticker = $update['message']['sticker'] ?? null;
-            if (is_array($rxPemSticker) && ($rxPemSticker['type'] ?? '') === 'custom_emoji'
-                && !empty($rxPemSticker['custom_emoji_id'])) {
-                $rxPemCid = (string)$rxPemSticker['custom_emoji_id'];
-            }
-        }
-
-        if ($rxPemCid === '') {
-            $rxPemReply = $update['message']['reply_to_message'] ?? null;
-            if (is_array($rxPemReply)) {
-                $rxPemReplyEntities = $rxPemReply['entities'] ?? $rxPemReply['caption_entities'] ?? [];
-                if (is_array($rxPemReplyEntities)) {
-                    foreach ($rxPemReplyEntities as $rxPemEnt) {
-                        if (($rxPemEnt['type'] ?? '') === 'custom_emoji' && !empty($rxPemEnt['custom_emoji_id'])) {
-                            $rxPemCid = (string)$rxPemEnt['custom_emoji_id'];
-                            break;
-                        }
-                    }
-                }
-                if ($rxPemCid === '') {
-                    $rxPemReplySticker = $rxPemReply['sticker'] ?? null;
-                    if (is_array($rxPemReplySticker)
-                        && ($rxPemReplySticker['type'] ?? '') === 'custom_emoji'
-                        && !empty($rxPemReplySticker['custom_emoji_id'])) {
-                        $rxPemCid = (string)$rxPemReplySticker['custom_emoji_id'];
-                    }
-                }
-            }
-        }
-
-        if ($rxPemCid === '' && is_string($text)) {
-            $rxPemCandidate = trim($text);
-            if (ctype_digit($rxPemCandidate) && strlen($rxPemCandidate) >= 8 && strlen($rxPemCandidate) <= 30) {
-                $rxPemCid = $rxPemCandidate;
-            }
-        }
+        $rxPemCid = rxPremiumEmojiExtractCustomId($rxPemMsg);
 
         if ($rxPemCid === '') {
             $rxPemDiag = '';
-            $rxPemSentText = is_string($text) ? trim($text) : '';
-            $rxPemStkType = is_array($update['message']['sticker'] ?? null) ? ($update['message']['sticker']['type'] ?? '') : '';
+            $rxPemSentText = trim((string)($rxPemMsg['text'] ?? $rxPemMsg['caption'] ?? ''));
+            $rxPemStkType = is_array($rxPemMsg['sticker'] ?? null) ? (string)($rxPemMsg['sticker']['type'] ?? '') : '';
             if ($rxPemStkType !== '' && $rxPemStkType !== 'custom_emoji') {
                 $rxPemDiag = "🔎 شما یک <b>استیکر معمولی</b> فرستادید (نوع آن custom_emoji نیست).";
-            } elseif ($rxPemSentText !== '' && mb_strlen($rxPemSentText, 'UTF-8') <= 4) {
-                $rxPemDiag = "🔎 شما یک <b>ایموجی عادی</b> فرستادید: <b>{$rxPemSentText}</b>\nاین فاقد متادیتای پرمیوم است.";
-            } elseif (ctype_digit($rxPemSentText)) {
+            } elseif ($rxPemSentText !== '' && ctype_digit($rxPemSentText)) {
                 $rxPemDiag = "🔎 آیدی عددی نامعتبر است (طول باید بین ۸ تا ۳۰ رقم باشد).";
+            } elseif ($rxPemSentText !== '' && mb_strlen($rxPemSentText, 'UTF-8') <= 4) {
+                $rxPemDiag = "🔎 شما یک <b>ایموجی عادی</b> فرستادید: <b>" . htmlspecialchars($rxPemSentText, ENT_QUOTES, 'UTF-8') . "</b>\nاین فاقد متادیتای پرمیوم است.";
             }
             if ($rxPemDiag !== '') { $rxPemDiag .= "\n\n"; }
             nm_adminInstantReply($from_id, "❌ ایموجی پرمیوم یافت نشد.\n\n{$rxPemDiag}📌 لطفاً <b>ایموجی پرمیوم</b> را برای ایموجی پایه «{$rxPemBase}» ارسال کنید.\n\n💡 یا اگر آیدی عددی پرمیوم را دارید، آن را پیست کنید.", json_encode([
@@ -3406,22 +3379,33 @@ elseif ($text == "📝 تنظیم متن ربات" && $adminrulecheck['rule'] ==
 
         $rxPemNow = time();
         $rxPemAlreadyExists = false;
-        try {
-            $rxPemIns = $pdo->prepare("INSERT INTO premium_emojis (emoji, custom_emoji_id, created_at, updated_at) VALUES (:e, :c, :t1, :t2)");
-            $rxPemIns->execute([':e' => $rxPemBase, ':c' => $rxPemCid, ':t1' => $rxPemNow, ':t2' => $rxPemNow]);
-        } catch (\Throwable $rxPemInsErr) {
-
-            if (stripos($rxPemInsErr->getMessage(), 'Duplicate') !== false || stripos($rxPemInsErr->getMessage(), '1062') !== false) {
+        $rxPemExistStmt = $pdo->prepare("SELECT id, emoji FROM premium_emojis WHERE custom_emoji_id = :c");
+        $rxPemExistStmt->execute([':c' => $rxPemCid]);
+        while ($rxPemExistRow = $rxPemExistStmt->fetch(PDO::FETCH_ASSOC)) {
+            if ((string)$rxPemExistRow['emoji'] === $rxPemBase) {
                 $rxPemAlreadyExists = true;
-                try {
-                    $rxPemTouch = $pdo->prepare("UPDATE premium_emojis SET updated_at = :t WHERE emoji = :e AND custom_emoji_id = :c");
-                    $rxPemTouch->execute([':t' => $rxPemNow, ':e' => $rxPemBase, ':c' => $rxPemCid]);
-                } catch (\Throwable $rxPemTouchErr) {  }
-            } else {
-                throw $rxPemInsErr;
+                break;
             }
         }
+        if (!$rxPemAlreadyExists) {
+            try {
+                $rxPemIns = $pdo->prepare("INSERT INTO premium_emojis (emoji, custom_emoji_id, created_at, updated_at) VALUES (:e, :c, :t1, :t2)");
+                $rxPemIns->execute([':e' => $rxPemBase, ':c' => $rxPemCid, ':t1' => $rxPemNow, ':t2' => $rxPemNow]);
+            } catch (\Throwable $rxPemInsErr) {
+                if (!rxPremiumEmojiIsDuplicateError($rxPemInsErr)) {
+                    throw $rxPemInsErr;
+                }
+                $rxPemAlreadyExists = true;
+            }
+        }
+        if ($rxPemAlreadyExists) {
+            try {
+                $rxPemTouch = $pdo->prepare("UPDATE premium_emojis SET updated_at = :t WHERE emoji = :e AND custom_emoji_id = :c");
+                $rxPemTouch->execute([':t' => $rxPemNow, ':e' => $rxPemBase, ':c' => $rxPemCid]);
+            } catch (\Throwable $rxPemTouchErr) {  }
+        }
         if (function_exists('getPremiumEmojiMap')) { getPremiumEmojiMap(true); }
+        rxPremiumEmojiResetState($from_id);
 
         if ($rxPemAlreadyExists) {
             $rxPemSuccessMsg = "ℹ️ <b>این ایموجی پرمیوم با همین آیدی قبلاً ثبت شده بود</b>\n\n"
@@ -3447,88 +3431,76 @@ elseif ($text == "📝 تنظیم متن ربات" && $adminrulecheck['rule'] ==
             ];
         }
         nm_adminInstantReply($from_id, $rxPemSuccessMsg, json_encode(['inline_keyboard' => $rxPemButtons]), 'HTML');
-        step('home', $from_id);
     } catch (\Throwable $rxPemErr) {
         @error_log('[premium_emoji_get_id] EXCEPTION: ' . $rxPemErr->getMessage() . ' @ ' . $rxPemErr->getFile() . ':' . $rxPemErr->getLine());
+        rxPremiumEmojiResetState($from_id);
         $rxPemErrMsg = htmlspecialchars($rxPemErr->getMessage(), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         nm_adminInstantReply($from_id, "⚠️ <b>خطای داخلی هنگام ذخیره ایموجی پرمیوم</b>\n\n<code>{$rxPemErrMsg}</code>", json_encode([
             'inline_keyboard' => [[['text' => "🔙 بازگشت", 'callback_data' => "premium_emoji_settings"]]]
         ]), 'HTML');
-        step('home', $from_id);
         return;
     }
 } elseif ($user['step'] == "premium_emoji_edit_id" && $adminrulecheck['rule'] == "administrator") {
-    if (!isset($update['message']) && empty($text)) { return; }
+    if (!isset($update['message']) || !is_array($update['message'])) { return; }
     try {
-    $rxPemRowId = (int)($user['Processing_value'] ?? 0);
-    if ($rxPemRowId <= 0) {
-        nm_adminInstantReply($from_id, "❌ خطا: ردیف ایموجی یافت نشد.", null, 'HTML');
-        step('home', $from_id);
-        return;
-    }
-    $rxPemCid = '';
-    $rxPemEntities = $update['message']['entities'] ?? $update['message']['caption_entities'] ?? [];
-    if (is_array($rxPemEntities)) {
-        foreach ($rxPemEntities as $rxPemEnt) {
-            if (($rxPemEnt['type'] ?? '') === 'custom_emoji' && !empty($rxPemEnt['custom_emoji_id'])) {
-                $rxPemCid = (string)$rxPemEnt['custom_emoji_id'];
-                break;
-            }
+        $rxPemMsg = $update['message'];
+        $rxPemBackKb = json_encode([
+            'inline_keyboard' => [[['text' => "🔙 بازگشت به لیست", 'callback_data' => "premium_emoji_settings"]]]
+        ]);
+        $rxPemRowId = (int)($user['Processing_value'] ?? 0);
+        $rxPemRow = null;
+        if ($rxPemRowId > 0) {
+            $rxPemRowStmt = $pdo->prepare("SELECT id, emoji, custom_emoji_id FROM premium_emojis WHERE id = :id LIMIT 1");
+            $rxPemRowStmt->execute([':id' => $rxPemRowId]);
+            $rxPemRow = $rxPemRowStmt->fetch(PDO::FETCH_ASSOC);
         }
-    }
-
-    $rxPemSticker = $update['message']['sticker'] ?? null;
-    if ($rxPemCid === '' && is_array($rxPemSticker)) {
-        if (($rxPemSticker['type'] ?? '') === 'custom_emoji' && !empty($rxPemSticker['custom_emoji_id'])) {
-            $rxPemCid = (string)$rxPemSticker['custom_emoji_id'];
+        if (!is_array($rxPemRow)) {
+            rxPremiumEmojiResetState($from_id);
+            nm_adminInstantReply($from_id, "❌ خطا: ردیف ایموجی یافت نشد. ممکن است حذف شده باشد.", $rxPemBackKb, 'HTML');
+            return;
         }
-    }
 
-    $rxPemReply = $update['message']['reply_to_message'] ?? null;
-    if ($rxPemCid === '' && is_array($rxPemReply)) {
-        $rxPemReplyEntities = $rxPemReply['entities'] ?? $rxPemReply['caption_entities'] ?? [];
-        if (is_array($rxPemReplyEntities)) {
-            foreach ($rxPemReplyEntities as $rxPemEnt) {
-                if (($rxPemEnt['type'] ?? '') === 'custom_emoji' && !empty($rxPemEnt['custom_emoji_id'])) {
-                    $rxPemCid = (string)$rxPemEnt['custom_emoji_id'];
-                    break;
+        $rxPemCid = rxPremiumEmojiExtractCustomId($rxPemMsg);
+        if ($rxPemCid === '') {
+            nm_adminInstantReply($from_id, "❌ آیدی ایموجی پرمیوم یافت نشد.\n\n📌 لطفاً <b>ایموجی پرمیوم</b> را ارسال کنید یا آیدی عددی را وارد نمایید.", json_encode([
+                'inline_keyboard' => [[['text' => "🔙 لغو", 'callback_data' => "premium_emoji_settings"]]]
+            ]), 'HTML');
+            return;
+        }
+
+        $rxPemRowEmoji = (string)$rxPemRow['emoji'];
+        if ((string)$rxPemRow['custom_emoji_id'] !== $rxPemCid) {
+            $rxPemDupStmt = $pdo->prepare("SELECT id, emoji FROM premium_emojis WHERE custom_emoji_id = :c AND id <> :id");
+            $rxPemDupStmt->execute([':c' => $rxPemCid, ':id' => $rxPemRowId]);
+            while ($rxPemDupRow = $rxPemDupStmt->fetch(PDO::FETCH_ASSOC)) {
+                if ((string)$rxPemDupRow['emoji'] === $rxPemRowEmoji) {
+                    rxPremiumEmojiResetState($from_id);
+                    nm_adminInstantReply($from_id, "ℹ️ این آیدی پرمیوم برای ایموجی {$rxPemRowEmoji} در ردیف دیگری ثبت شده است و تغییری اعمال نشد.\n\n🆔 <code>{$rxPemCid}</code>", $rxPemBackKb, 'HTML');
+                    return;
                 }
             }
+            try {
+                $rxPemStmt = $pdo->prepare("UPDATE premium_emojis SET custom_emoji_id = :c, updated_at = :t WHERE id = :id");
+                $rxPemStmt->execute([':id' => $rxPemRowId, ':c' => $rxPemCid, ':t' => time()]);
+            } catch (\Throwable $rxPemUpdErr) {
+                if (!rxPremiumEmojiIsDuplicateError($rxPemUpdErr)) {
+                    throw $rxPemUpdErr;
+                }
+                rxPremiumEmojiResetState($from_id);
+                nm_adminInstantReply($from_id, "ℹ️ این آیدی پرمیوم برای ایموجی {$rxPemRowEmoji} در ردیف دیگری ثبت شده است و تغییری اعمال نشد.\n\n🆔 <code>{$rxPemCid}</code>", $rxPemBackKb, 'HTML');
+                return;
+            }
+            if (function_exists('getPremiumEmojiMap')) { getPremiumEmojiMap(true); }
         }
-        $rxPemReplySticker = $rxPemReply['sticker'] ?? null;
-        if ($rxPemCid === '' && is_array($rxPemReplySticker)
-            && ($rxPemReplySticker['type'] ?? '') === 'custom_emoji'
-            && !empty($rxPemReplySticker['custom_emoji_id'])) {
-            $rxPemCid = (string)$rxPemReplySticker['custom_emoji_id'];
-        }
-    }
-    if ($rxPemCid === '' && is_string($text)) {
-        $rxPemCandidate = trim($text);
-        if (ctype_digit($rxPemCandidate) && strlen($rxPemCandidate) >= 8 && strlen($rxPemCandidate) <= 30) {
-            $rxPemCid = $rxPemCandidate;
-        }
-    }
-    if ($rxPemCid === '') {
-        nm_adminInstantReply($from_id, "❌ آیدی ایموجی پرمیوم یافت نشد.\n\n📌 لطفاً <b>ایموجی پرمیوم</b> را ارسال کنید یا آیدی عددی را وارد نمایید.", null, 'HTML');
-        return;
-    }
-    $rxPemNow = time();
-    $rxPemStmt = $pdo->prepare("UPDATE premium_emojis SET custom_emoji_id = :c, updated_at = :t WHERE id = :id");
-    $rxPemStmt->execute([':id' => $rxPemRowId, ':c' => $rxPemCid, ':t' => $rxPemNow]);
-    if (function_exists('getPremiumEmojiMap')) { getPremiumEmojiMap(true); }
-    nm_adminInstantReply($from_id, "✅ ایموجی پرمیوم به‌روزرسانی شد.\n\n🆔 <code>{$rxPemCid}</code>", json_encode([
-        'inline_keyboard' => [
-            [['text' => "🔙 بازگشت به لیست", 'callback_data' => "premium_emoji_settings"]],
-        ]
-    ]), 'HTML');
-    step('home', $from_id);
+        rxPremiumEmojiResetState($from_id);
+        nm_adminInstantReply($from_id, "✅ ایموجی پرمیوم به‌روزرسانی شد.\n\n🆔 <code>{$rxPemCid}</code>", $rxPemBackKb, 'HTML');
     } catch (\Throwable $rxPemEditErr) {
         @error_log('[premium_emoji_edit_id] EXCEPTION: ' . $rxPemEditErr->getMessage() . ' @ ' . $rxPemEditErr->getFile() . ':' . $rxPemEditErr->getLine());
+        rxPremiumEmojiResetState($from_id);
         $rxPemErrMsg = htmlspecialchars($rxPemEditErr->getMessage(), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         nm_adminInstantReply($from_id, "⚠️ <b>خطای داخلی هنگام ویرایش ایموجی پرمیوم</b>\n\n<code>{$rxPemErrMsg}</code>", json_encode([
             'inline_keyboard' => [[['text' => "🔙 بازگشت", 'callback_data' => "premium_emoji_settings"]]]
         ]), 'HTML');
-        step('home', $from_id);
         return;
     }
 } elseif (preg_match('/sendmessageuser_(\w+)/', $datain, $dataget)) {
@@ -5793,55 +5765,128 @@ $caption";
 بله : 1
 خیر : 0", $backadmin, 'HTML');
     step("getmeesagestatus", $from_id);
-} elseif ($user['step'] == "getmeesagestatus") {
-    if (!isset($update['message']) && empty($text)) { return; }
-    $userdata = json_decode($user['Processing_value'], true);
-    nm_adminInstantReply($from_id, $textbotlang['Admin']['Balance']['AddBalanceUsers'], $keyboardadmin, 'HTML');
-    $query_where = "";
-    if ($userdata['agent'] == "all") {
-        if ($userdata['typecustomer'] == "all") {
-            $query_where = "";
-        } elseif ($userdata['typecustomer'] == "customer") {
-            $query_where = "WHERE EXISTS ( SELECT 1 FROM invoice i WHERE i.id_user = u.id);";
-        } elseif ($userdata['typecustomer'] == "notcustomer") {
-            $query_where = "WHERE  NOT EXISTS ( SELECT 1 FROM invoice i WHERE i.id_user = u.id);";
-        }
+} elseif ($user['step'] == "getmeesagestatus" || (is_string($datain) && preg_match('/^bulkgift_resume_([a-f0-9]{16})$/', $datain, $rxGiftResume))) {
+    if (!empty($rxGiftResume[1])) {
+        $rxGiftBatch = $rxGiftResume[1];
+        telegram('answerCallbackQuery', ['callback_query_id' => $callback_query_id, 'text' => '⏳ در حال ادامه شارژ همگانی...', 'cache_time' => 0]);
     } else {
-        if ($userdata['typecustomer'] == "all") {
-            $query_where = null;
-            ;
-        } elseif ($userdata['typecustomer'] == "customer") {
-            $query_where = " WHERE u.agent =  '{$userdata['agent']}' AND EXISTS ( SELECT 1 FROM invoice i WHERE i.id_user = u.id);";
-        } elseif ($userdata['typecustomer'] == "notcustomer") {
-            $query_where = " WHERE u.agent =  '{$userdata['agent']}' AND NOT EXISTS ( SELECT 1 FROM invoice i WHERE i.id_user = u.id);";
+        if (!isset($update['message']) && empty($text)) { return; }
+        if ($text !== "0" && $text !== "1") {
+            nm_adminInstantReply($from_id, "❌ فقط عدد 1 (ارسال پیام) یا 0 (بدون پیام) را ارسال کنید.", $backadmin, 'HTML');
+            return;
         }
+        $userdata = json_decode((string) $user['Processing_value'], true);
+        $rxGiftAmount = (is_array($userdata) && ctype_digit((string) ($userdata['price'] ?? ''))) ? (int) $userdata['price'] : 0;
+        $rxGiftAgent = is_array($userdata) ? (string) ($userdata['agent'] ?? '') : '';
+        if ($rxGiftAgent === 'nl') {
+            $rxGiftAgent = 'n';
+        }
+        $rxGiftType = is_array($userdata) ? (string) ($userdata['typecustomer'] ?? '') : '';
+        if ($rxGiftAmount <= 0 || $rxGiftAmount > 100000000
+            || !in_array($rxGiftAgent, ['all', 'f', 'n', 'n2'], true)
+            || !in_array($rxGiftType, ['all', 'customer', 'notcustomer'], true)) {
+            step('home', $from_id);
+            nm_adminInstantReply($from_id, "❌ اطلاعات شارژ همگانی نامعتبر است (مبلغ باید بین 1 تا 100,000,000 باشد). عملیات را از ابتدا شروع کنید.", $keyboardadmin, 'HTML');
+            return;
+        }
+        $rxGiftClaim = $pdo->prepare("UPDATE user SET step = 'home' WHERE id = :admin AND step = 'getmeesagestatus'");
+        $rxGiftClaim->execute([':admin' => $from_id]);
+        if ($rxGiftClaim->rowCount() < 1) {
+            return;
+        }
+        $rxGiftWhere = [];
+        $rxGiftParams = [];
+        if ($rxGiftAgent !== 'all') {
+            $rxGiftWhere[] = "u.agent = ?";
+            $rxGiftParams[] = $rxGiftAgent;
+        }
+        if ($rxGiftType === 'customer') {
+            $rxGiftWhere[] = "EXISTS (SELECT 1 FROM invoice i WHERE i.id_user = u.id)";
+        } elseif ($rxGiftType === 'notcustomer') {
+            $rxGiftWhere[] = "NOT EXISTS (SELECT 1 FROM invoice i WHERE i.id_user = u.id)";
+        }
+        $stmt = $pdo->prepare("SELECT u.id FROM user u" . (empty($rxGiftWhere) ? "" : " WHERE " . implode(" AND ", $rxGiftWhere)) . " ORDER BY u.id");
+        $stmt->execute($rxGiftParams);
+        $rxGiftIds = array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        if (empty($rxGiftIds)) {
+            nm_adminInstantReply($from_id, "❌ هیچ کاربری با شرایط انتخاب‌شده پیدا نشد؛ شارژی انجام نشد.", $keyboardadmin, 'HTML');
+            return;
+        }
+        $rxGiftBatch = bin2hex(random_bytes(8));
+        $rxGiftState = [
+            'batch' => $rxGiftBatch,
+            'admin' => (string) $from_id,
+            'amount' => $rxGiftAmount,
+            'agent' => $rxGiftAgent,
+            'typecustomer' => $rxGiftType,
+            'notify' => $text === "1",
+            'ids' => $rxGiftIds,
+            'pos' => 0,
+            'credited' => 0,
+            'already' => 0,
+            'missing' => 0,
+            'failed' => [],
+            'status' => 'pending',
+            'notified' => false,
+            'started_at' => time(),
+        ];
+        if (!rx_bulk_gift_save(rx_bulk_gift_state_path($rxGiftBatch), $rxGiftState)) {
+            nm_adminInstantReply($from_id, "❌ ذخیره وضعیت شارژ همگانی ممکن نشد؛ هیچ شارژی انجام نشد.", $keyboardadmin, 'HTML');
+            return;
+        }
+        if (function_exists('rx_log_event')) {
+            rx_log_event('BULK_GIFT_START', 'bulk gift started', ['batch' => $rxGiftBatch, 'admin' => $from_id, 'amount' => $rxGiftAmount, 'users' => count($rxGiftIds), 'agent' => $rxGiftAgent, 'type' => $rxGiftType]);
+        }
+        nm_adminInstantReply($from_id, "⏳ شارژ همگانی " . rxFormatToman($rxGiftAmount) . " تومان برای " . number_format(count($rxGiftIds)) . " کاربر آغاز شد.\n🆔 <code>{$rxGiftBatch}</code>", json_encode(['inline_keyboard' => [[['text' => "▶️ ادامه شارژ همگانی", 'callback_data' => 'bulkgift_resume_' . $rxGiftBatch]]]]), 'HTML');
     }
-    $stmt = $pdo->prepare("SELECT u.id FROM user u " . $query_where);
-    $stmt->execute();
-    $Balance_user = $stmt->fetchAll();
-    $stmt = $pdo->prepare("UPDATE user as u SET  Balance = Balance + {$userdata['price']} " . $query_where);
-    $stmt->execute();
-    step('home', $from_id);
-    if ($text == "1") {
-        $cancelmessage = json_encode([
-            'inline_keyboard' => [
-                [
-                    ['text' => "لغو عملیات", 'callback_data' => 'cancel_sendmessage'],
-                ],
-            ]
-        ]);
-        $textgift = "🎁 کاربر  عزیز مبلغ " . rxFormatToman($userdata['price']) . " تومان از طرف مدیریت به عنوان هدیه به کیف پول شما واریز گردید.";
-        $message_id = sendmessage($from_id, "✅ عملیات ارسال پیام آغاز گردید پس از پایان اطلاع رسانی خواهد شد.", $cancelmessage, "html");
-        $data = json_encode(array(
-            "id_admin" => $from_id,
-            'type' => "sendmessage",
-            "id_message" => $message_id['result']['message_id'],
-            "message" => $textgift,
-            "pingmessage" => "no",
-            "btnmessage" => "start"
-        ));
-        file_put_contents("cronbot/users.json", json_encode($Balance_user));
-        file_put_contents('cronbot/info', $data);
+    $rxGiftState = rx_bulk_gift_run($rxGiftBatch);
+    $rxGiftStatus = (string) ($rxGiftState['status'] ?? 'missing');
+    if ($rxGiftStatus === 'missing') {
+        nm_adminInstantReply($from_id, "❌ عملیات شارژ همگانی پیدا نشد.", $keyboardadmin, 'HTML');
+        return;
+    }
+    $rxGiftTotal = count((array) ($rxGiftState['ids'] ?? []));
+    $rxGiftFailed = (array) ($rxGiftState['failed'] ?? []);
+    $rxGiftSummary = "📊 گزارش شارژ همگانی <code>{$rxGiftBatch}</code>\n\n"
+        . "👥 کل کاربران: " . number_format($rxGiftTotal) . "\n"
+        . "✅ شارژ شده: " . number_format((int) ($rxGiftState['credited'] ?? 0) + (int) ($rxGiftState['already'] ?? 0)) . "\n"
+        . "⏭ کاربر حذف‌شده: " . number_format((int) ($rxGiftState['missing'] ?? 0)) . "\n"
+        . "❌ ناموفق: " . number_format(count($rxGiftFailed)) . "\n"
+        . "⏳ پردازش‌نشده: " . number_format(max(0, $rxGiftTotal - (int) ($rxGiftState['pos'] ?? 0)));
+    if (!empty($rxGiftFailed)) {
+        $rxGiftSummary .= "\n\n❌ شناسه‌های ناموفق: <code>" . htmlspecialchars(implode(', ', array_slice(array_keys($rxGiftFailed), 0, 30))) . "</code>";
+    }
+    if ($rxGiftStatus !== 'done') {
+        $rxGiftSummary .= "\n\n" . ($rxGiftStatus === 'busy' ? "⏳ این عملیات هم‌اکنون در حال اجراست." : "⚠️ عملیات کامل نشد؛ برای ادامه از دکمه زیر استفاده کنید.");
+        nm_adminInstantReply($from_id, $rxGiftSummary, json_encode(['inline_keyboard' => [[['text' => "▶️ ادامه شارژ همگانی", 'callback_data' => 'bulkgift_resume_' . $rxGiftBatch]]]]), 'HTML');
+        return;
+    }
+    nm_adminInstantReply($from_id, $textbotlang['Admin']['Balance']['AddBalanceUsers'] . "\n\n" . $rxGiftSummary, $keyboardadmin, 'HTML');
+    if (!empty($rxGiftState['notify']) && empty($rxGiftState['notified'])) {
+        $rxGiftState['notified'] = true;
+        rx_bulk_gift_save(rx_bulk_gift_state_path($rxGiftBatch), $rxGiftState);
+        $Balance_user = array_map(function ($id) { return ['id' => $id]; }, rx_bulk_gift_credited_ids($rxGiftBatch));
+        if (!empty($Balance_user)) {
+            $cancelmessage = json_encode([
+                'inline_keyboard' => [
+                    [
+                        ['text' => "لغو عملیات", 'callback_data' => 'cancel_sendmessage'],
+                    ],
+                ]
+            ]);
+            $textgift = "🎁 کاربر  عزیز مبلغ " . rxFormatToman($rxGiftState['amount']) . " تومان از طرف مدیریت به عنوان هدیه به کیف پول شما واریز گردید.";
+            $message_id = sendmessage($from_id, "✅ عملیات ارسال پیام آغاز گردید پس از پایان اطلاع رسانی خواهد شد.", $cancelmessage, "html");
+            $data = json_encode(array(
+                "id_admin" => $from_id,
+                'type' => "sendmessage",
+                "id_message" => $message_id['result']['message_id'],
+                "message" => $textgift,
+                "pingmessage" => "no",
+                "btnmessage" => "start"
+            ));
+            file_put_contents("cronbot/users.json", json_encode($Balance_user));
+            file_put_contents('cronbot/info', $data);
+        }
     }
 } elseif ($text == "⬇️ کم کردن موجودی") {
     nm_adminInstantReply($from_id, $textbotlang['Admin']['Balance']['NegativeBalance'], $backadmin, 'HTML');
@@ -5855,7 +5900,7 @@ $caption";
     update("user", "Processing_value", $text, "id", $from_id);
     step('get_price_Negative', $from_id);
 } elseif ($user['step'] == "get_price_Negative") {
-    if (!ctype_digit($text)) {
+    if (!ctype_digit($text) || intval($text) <= 0) {
         nm_adminInstantReply($from_id, $textbotlang['Admin']['Balance']['Invalidprice'], $backadmin, 'HTML');
         return;
     }
@@ -5863,14 +5908,49 @@ $caption";
         nm_adminInstantReply($from_id, "📌 حداکثر مقدار 100 میلیون ریال است.", $backadmin, 'HTML');
         return;
     }
+    $rxNegOk = false;
+    $rxNegReason = '';
+    try {
+        $pdo->beginTransaction();
+        $rxNegClaim = $pdo->prepare("UPDATE user SET step = 'home' WHERE id = :admin AND step = 'get_price_Negative'");
+        $rxNegClaim->execute([':admin' => $from_id]);
+        if ($rxNegClaim->rowCount() < 1) {
+            $pdo->rollBack();
+            return;
+        }
+        $rxNegCharge = balance_atomic_charge($user['Processing_value'], (int) $text, 0);
+        if (empty($rxNegCharge['ok'])) {
+            $rxNegReason = (string) ($rxNegCharge['reason'] ?? '');
+            throw new RuntimeException('balance_atomic_charge failed: ' . $rxNegReason);
+        }
+        if (function_exists('wallet_ledger_record')) {
+            wallet_ledger_record($user['Processing_value'], 'debit', $text, 'admin_debit', 'کاهش موجودی توسط ادمین');
+        }
+        $pdo->commit();
+        $rxNegOk = true;
+    } catch (Throwable $rxNegErr) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log('[admin_negative_balance] ' . $rxNegErr->getMessage());
+        if (function_exists('rx_log_event')) {
+            rx_log_event('ADMIN_NEGATIVE_BALANCE_FAILED', $rxNegErr->getMessage(), [
+                'admin_id' => $from_id,
+                'id_user' => $user['Processing_value'],
+                'amount' => $text,
+            ]);
+        }
+    }
+    if (!$rxNegOk) {
+        $rxNegMsg = $rxNegReason === 'insufficient-or-stale'
+            ? "❌ موجودی کاربر برای کسر این مبلغ کافی نیست."
+            : "❌ کسر موجودی انجام نشد. دوباره تلاش کنید.";
+        nm_adminInstantReply($from_id, $rxNegMsg, $backadmin, 'HTML');
+        return;
+    }
     nm_adminInstantReply($from_id, $textbotlang['Admin']['Balance']['NegativeBalanceUser'], $keyboardadmin, 'HTML');
-
-    $stmtAtomic = $pdo->prepare("UPDATE user SET Balance = Balance - :delta WHERE id = :uid");
-    $stmtAtomic->bindValue(':delta', (int) $text, PDO::PARAM_INT);
-    $stmtAtomic->bindValue(':uid', $user['Processing_value'], PDO::PARAM_STR);
-    $stmtAtomic->execute();
     $balances1 = number_format($text, 0);
-    $Balance_user_afters = number_format(select("user", "*", "id", $user['Processing_value'], "select")['Balance']);
+    $Balance_user_afters = number_format(select("user", "*", "id", $user['Processing_value'], "select", ['cache' => false])['Balance']);
     $textkam = "❌ کاربر عزیز مبلغ $balances1 تومان از  موجودی کیف پول تان کسر گردید.";
     sendmessage($user['Processing_value'], $textkam, null, 'HTML');
     step('home', $from_id);
@@ -5894,8 +5974,12 @@ $caption";
 } elseif ($datain == "searchuser" || $datain == "support_search" || $text == "👁‍🗨 جستجو کاربر") {
     nm_adminInstantReply($from_id, $textbotlang['Admin']['ManageUser']['GetIdUserunblock'], $backadmin, 'HTML');
     step('show_info', $from_id);
-} elseif ($user['step'] == "show_info" || preg_match('/manageuser_(\w+)/', $datain, $dataget) || preg_match('/updateinfouser_(\w+)/', $datain, $dataget) || strpos($text, "/user ") !== false || strpos($text, "/id ") !== false) {
-    if ($user['step'] == "show_info") {
+} elseif ($user['step'] == "show_info" || preg_match('/manageuser_(\w+)/', $datain, $dataget) || preg_match('/updateinfouser_(\w+)/', $datain, $dataget) || (is_string($datain) && preg_match('/^toggle_user_cardpayment_(\d+)$/', $datain)) || strpos($text, "/user ") !== false || strpos($text, "/id ") !== false) {
+    $rxCardpayToggle = is_string($datain) && preg_match('/^toggle_user_cardpayment_(\d+)$/', $datain, $rxCardpayMatch);
+    $rxCardpayNotice = null;
+    if ($rxCardpayToggle) {
+        $id_user = $rxCardpayMatch[1];
+    } elseif ($user['step'] == "show_info") {
         if (!isset($update['message']) && empty($text)) { return; }
         $id_user = $text;
     } elseif (explode(" ", $text)[0] == "/user") {
@@ -5908,6 +5992,39 @@ $caption";
     if (!userExists($id_user)) {
         nm_adminInstantReply($from_id, $textbotlang['Admin']['not-user'], null, 'HTML');
         return;
+    }
+    if ($rxCardpayToggle) {
+        $rxCardpayOk = false;
+        $rxCardpayNew = null;
+        try {
+            $rxCardpayStmt = $pdo->prepare("SELECT cardpayment FROM user WHERE id = ? LIMIT 1");
+            $rxCardpayStmt->execute([$id_user]);
+            $rxCardpayCurrent = $rxCardpayStmt->fetchColumn();
+            $rxCardpayStmt->closeCursor();
+            if ($rxCardpayCurrent !== false) {
+                $rxCardpayNew = intval($rxCardpayCurrent) === 1 ? "0" : "1";
+                update("user", "cardpayment", $rxCardpayNew, "id", $id_user);
+                $rxCardpayStmt->execute([$id_user]);
+                $rxCardpayAfter = $rxCardpayStmt->fetchColumn();
+                $rxCardpayStmt->closeCursor();
+                $rxCardpayOk = $rxCardpayAfter !== false && (string) intval($rxCardpayAfter) === $rxCardpayNew;
+            }
+        } catch (Throwable $rxCardpayErr) {
+            error_log('[toggle_user_cardpayment] ' . $rxCardpayErr->getMessage());
+            $rxCardpayOk = false;
+        }
+        if (!$rxCardpayOk) {
+            telegram('answerCallbackQuery', [
+                'callback_query_id' => $callback_query_id,
+                'text' => "❌ تغییر وضعیت نمایش شماره کارت انجام نشد. دوباره تلاش کنید.",
+                'show_alert' => true,
+                'cache_time' => 0,
+            ]);
+            return;
+        }
+        $rxCardpayNotice = $rxCardpayNew === "1"
+            ? "✅ نمایش شماره کارت برای این کاربر فعال شد"
+            : "✅ نمایش شماره کارت برای این کاربر غیرفعال شد";
     }
     $date = date("Y-m-d");
     $_stmt = $connect->prepare("SELECT COUNT(*) FROM invoice WHERE (status = 'active' OR status = 'end_of_time' OR status = 'end_of_volume' OR status = 'sendedwarn' OR Status = 'send_on_hold') AND id_user = ?");
@@ -5927,7 +6044,7 @@ $caption";
         $_stmt->bind_param("s", $id_user); $_stmt->execute();
         $sumvolume = $_stmt->get_result()->fetch_assoc(); $_stmt->close();
     }
-    $user = select("user", "*", "id", $id_user, "select");
+    $user = select("user", "*", "id", $id_user, "select", ['cache' => false]);
     $roll_Status = [
         '1' => $textbotlang['Admin']['ManageUser']['Acceptedphone'],
         '0' => $textbotlang['Admin']['ManageUser']['Failedphone'],
@@ -5951,6 +6068,12 @@ $caption";
             [['text' => "💡 خاموش کردن", 'callback_data' => "disableconfig-" . $id_user], ['text' => "💡 روشن کردن", 'callback_data' => "activeconfig-" . $id_user]],
             [['text' => "📑 احراز عضویت", 'callback_data' => "confirmchannel-" . $id_user], ['text' => "0️⃣ صفر کردن موجودی", 'callback_data' => "zerobalance-" . $id_user]],
             [['text' => "🕚 وضعیت ارسال پیام های کرون", 'callback_data' => "statuscronuser-" . $id_user]],
+            [[
+                'text' => intval($user['cardpayment'] ?? 0) === 1
+                    ? "💳 غیرفعال‌سازی نمایش شماره کارت"
+                    : "💳 فعال‌سازی نمایش شماره کارت",
+                'callback_data' => "toggle_user_cardpayment_" . $id_user,
+            ]],
             [['text' => "💳 منوی کارت", 'callback_data' => "usercardmenu_" . $id_user]],
             [[
                 'text' => intval($user['card_verify_bypass'] ?? 0) === 1
@@ -5994,7 +6117,6 @@ $caption";
         ['text' => "❌ بستن", 'callback_data' => 'close_stat']
     ];
     $keyboardmanage = json_encode($keyboardmanage, JSON_UNESCAPED_UNICODE);
-    $user['Balance'] = number_format($user['Balance']);
     if ($user['register'] != "none") {
         if ($user['register'] == null)
             return;
@@ -6093,7 +6215,15 @@ $text_expie_agent
 🔰 مجموع فروش یک ماه گذشته : {$rxFmtSuminvoicemonth} تومان
 
 ";
-    if (is_string($datain) && isset($datain[0]) && $datain[0] == "u") {
+    if ($rxCardpayNotice !== null) {
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => $rxCardpayNotice,
+            'show_alert' => false,
+            'cache_time' => 0,
+        ]);
+        Editmessagetext($from_id, $message_id, $textinfouser, $keyboardmanage);
+    } elseif (is_string($datain) && isset($datain[0]) && $datain[0] == "u") {
         telegram('answerCallbackQuery', array(
             'callback_query_id' => $callback_query_id,
             'text' => "اطلاعات بروزرسانی گردید",

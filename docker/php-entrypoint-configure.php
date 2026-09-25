@@ -14,17 +14,6 @@ function env_or($name, $default = '')
     return ($value === false || $value === '') ? $default : $value;
 }
 
-function env_first(array $names, $default = '')
-{
-    foreach ($names as $name) {
-        $value = getenv($name);
-        if ($value !== false && $value !== '') {
-            return $value;
-        }
-    }
-    return $default;
-}
-
 function fetch_bot_username($token)
 {
     if ($token === '') {
@@ -43,40 +32,30 @@ function fetch_bot_username($token)
 }
 
 $botToken = env_or('TELEGRAM_BOT_TOKEN');
-$railwayDomain = env_or('RAILWAY_PUBLIC_DOMAIN');
-$domain = env_or('DOMAIN', $railwayDomain);
-
-// Railway exposes the application at the domain root. Existing Docker/VPS
-// installs keep the historical /faoxima default unless URL_PATH is provided.
-$urlPathValue = getenv('URL_PATH');
-$urlPath = $urlPathValue === false
-    ? ($railwayDomain !== '' ? '' : 'faoxima')
-    : trim((string) $urlPathValue, '/');
-
-$domainAddress = preg_replace('#^https?://#i', '', trim((string) $domain));
-$domainAddress = rtrim((string) $domainAddress, '/');
+$botUsername = ltrim(env_or('TELEGRAM_BOT_USERNAME'), '@');
+if ($botUsername === '') {
+    $botUsername = fetch_bot_username($botToken);
+}
+$urlPath = trim(env_or('URL_PATH'), '/');
+$domain = rtrim(preg_replace('#^https?://#i', '', trim(env_or('DOMAIN', env_or('RAILWAY_PUBLIC_DOMAIN')))), '/');
 if ($urlPath !== '') {
-    $domainAddress .= '/' . $urlPath;
+    $domain .= '/' . $urlPath;
 }
 
 $replacements = [
-    '{database_name}' => env_first(['DB_NAME', 'MYSQLDATABASE']),
-    '{username_db}'   => env_first(['DB_USER', 'MYSQLUSER']),
-    '{password_db}'   => env_first(['DB_PASS', 'MYSQLPASSWORD']),
-    '{db_host}'       => env_first(['DB_HOST', 'MYSQLHOST'], 'db'),
+    '{database_name}' => env_or('DB_NAME'),
+    '{username_db}'   => env_or('DB_USER'),
+    '{password_db}'   => env_or('DB_PASS'),
+    '{db_host}'       => env_or('DB_HOST', 'db'),
     '{API_KEY}'       => $botToken,
     '{admin_number}'  => env_or('TELEGRAM_ADMIN_ID'),
-    '{domain_name}'   => $domainAddress,
-    '{username_bot}'  => fetch_bot_username($botToken),
+    '{domain_name}'   => $domain,
+    '{username_bot}'  => $botUsername,
 ];
 
 function updateConfigValues($configContents, array $placeholderValues, &$replacementCount = 0)
 {
     $replacementCount = 0;
-    $configData = str_replace(array_keys($placeholderValues), array_values($placeholderValues), $configContents, $placeholderReplacementCount);
-    if ($placeholderReplacementCount > 0) {
-        $replacementCount += $placeholderReplacementCount;
-    }
     $variableMap = [
         'dbname'      => $placeholderValues['{database_name}'] ?? '',
         'usernamedb'  => $placeholderValues['{username_db}'] ?? '',
@@ -87,16 +66,14 @@ function updateConfigValues($configContents, array $placeholderValues, &$replace
         'domainhosts' => $placeholderValues['{domain_name}'] ?? '',
         'usernamebot' => $placeholderValues['{username_bot}'] ?? '',
     ];
-    $updatedConfig = $configData;
+    $updatedConfig = $configContents;
     foreach ($variableMap as $variable => $value) {
-        $pattern = '/(\$' . preg_quote($variable, '/') . '\s*=\s*)([\'\"])(.*?)(\2)(\s*;)([^\n]*)(\n?)/u';
+        $pattern = '/(\$' . preg_quote($variable, '/') . '\s*=\s*)(?:\'(?:\\\\.|[^\'\\\\])*\'|"(?:\\\\.|[^"\\\\])*")(\s*;)/s';
         $updatedConfig = preg_replace_callback(
             $pattern,
             function ($matches) use ($value, &$replacementCount) {
                 $replacementCount++;
-                $quoteChar      = $matches[2];
-                $formattedValue = formatConfigValue($value, $quoteChar);
-                return $matches[1] . $formattedValue . $matches[5] . $matches[6] . $matches[7];
+                return $matches[1] . var_export((string) $value, true) . $matches[2];
             },
             $updatedConfig,
             1
@@ -105,27 +82,11 @@ function updateConfigValues($configContents, array $placeholderValues, &$replace
     return $updatedConfig;
 }
 
-function formatConfigValue($value, $quoteChar = '\'')
-{
-    if ($value === null) {
-        return 'null';
-    }
-    if (is_bool($value)) {
-        return $value ? 'true' : 'false';
-    }
-    if ($quoteChar !== "'" && $quoteChar !== '"') {
-        $quoteChar = "'";
-    }
-    $stringValue  = (string) $value;
-    $escapedValue = addcslashes($stringValue, "\\$quoteChar");
-    return $quoteChar . $escapedValue . $quoteChar;
-}
-
 $rawConfigData     = file_get_contents($configDirectory);
 $replacementCount  = 0;
 $newConfigData     = updateConfigValues($rawConfigData, $replacements, $replacementCount);
 
-if ($replacementCount === 0 || file_put_contents($configDirectory, $newConfigData) === false) {
+if ($replacementCount !== 8 || file_put_contents($configDirectory, $newConfigData, LOCK_EX) === false) {
     fwrite(STDERR, "[php-entrypoint-configure] failed to rewrite config.php (replacementCount={$replacementCount})\n");
     exit(1);
 }

@@ -249,9 +249,12 @@ final class ServiceRenewConfirmHandler extends BaseHandler
             if (!is_array($stockNew) || (string)($stockNew['content'] ?? '') === '') {
                 if (is_array($stockNew) && function_exists('nmStockReleaseReservation')) nmStockReleaseReservation($stockNew);
                 if ($balanceCharged) {
-                    balance_atomic_credit($this->user['id'], $finalPrice);
-                    if (function_exists('wallet_ledger_record')) {
-                        wallet_ledger_record($this->user['id'], 'credit', $finalPrice, 'refund', faoxima_textbot_get('dyn_renewconfirm_stock_refund_note', 'بازگشت وجه به دلیل خطای انبار'), null, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                    if (balance_atomic_credit($this->user['id'], $finalPrice)) {
+                        if (function_exists('wallet_ledger_record')) {
+                            wallet_ledger_record($this->user['id'], 'credit', $finalPrice, 'refund', faoxima_textbot_get('dyn_renewconfirm_stock_refund_note', 'بازگشت وجه به دلیل خطای انبار'), null, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                        }
+                    } else {
+                        FaoximaLogger::error('refund credit failed', ['user' => $this->user['id'], 'amount' => $finalPrice]);
                     }
                 }
                 FaoximaResponse::fail(409, faoxima_textbot_get('dyn_renewconfirm_stock_depleted', '❌ موجودی انبار برای این محصول تمام شده است. مبلغی کسر نشد.'));
@@ -347,9 +350,12 @@ final class ServiceRenewConfirmHandler extends BaseHandler
                 'username' => $invoice['username'] ?? null,
             ]);
             if ($balanceCharged) {
-                balance_atomic_credit($this->user['id'], $finalPrice);
-                if (function_exists('wallet_ledger_record')) {
-                    wallet_ledger_record($this->user['id'], 'credit', $finalPrice, 'refund', faoxima_textbot_get('dyn_renewconfirm_extend_refund_note', 'بازگشت وجه به دلیل خطای تمدید سرویس'), null, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                if (balance_atomic_credit($this->user['id'], $finalPrice)) {
+                    if (function_exists('wallet_ledger_record')) {
+                        wallet_ledger_record($this->user['id'], 'credit', $finalPrice, 'refund', faoxima_textbot_get('dyn_renewconfirm_extend_refund_note', 'بازگشت وجه به دلیل خطای تمدید سرویس'), null, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                    }
+                } else {
+                    FaoximaLogger::error('refund credit failed', ['user' => $this->user['id'], 'amount' => $finalPrice]);
                 }
             }
             FaoximaResponse::fail(502, faoxima_textbot_get('dyn_renewconfirm_extend_error', '❌ خطایی در تمدید سرویس رخ داده با پشتیبانی در ارتباط باشید'));
@@ -366,15 +372,18 @@ final class ServiceRenewConfirmHandler extends BaseHandler
             ]);
 
             if ($balanceCharged) {
-                balance_atomic_credit($this->user['id'], $finalPrice);
-                if (function_exists('wallet_ledger_record')) {
-                    wallet_ledger_record($this->user['id'], 'credit', $finalPrice, 'refund', faoxima_textbot_get('dyn_renewconfirm_extend_refund_note', 'بازگشت وجه به دلیل خطای تمدید سرویس'), null, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                if (balance_atomic_credit($this->user['id'], $finalPrice)) {
+                    if (function_exists('wallet_ledger_record')) {
+                        wallet_ledger_record($this->user['id'], 'credit', $finalPrice, 'refund', faoxima_textbot_get('dyn_renewconfirm_extend_refund_note', 'بازگشت وجه به دلیل خطای تمدید سرویس'), null, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                    }
+                } else {
+                    FaoximaLogger::error('refund credit failed', ['user' => $this->user['id'], 'amount' => $finalPrice]);
                 }
             }
             $this->reportError(
                 faoxima_render_text(faoxima_textbot_get('dyn_renewconfirm_extend_failed_report_tpl', "خطای تمدید سرویس\n<blockquote>نام پنل : {panel_name}</blockquote>\n<blockquote>نام کاربری سرویس : {username}</blockquote>\n<blockquote>دلیل خطا : {reason}</blockquote>"), [
                     'panel_name' => $panel['name_panel'],
-                    'username' => $invoice['username'],
+                    'username' => guardDisplayUsername($invoice['username'], $panel),
                     'reason' => $reason,
                 ])
             );
@@ -476,7 +485,7 @@ final class ServiceRenewConfirmHandler extends BaseHandler
         $this->reportSuccess(
             faoxima_render_text(faoxima_textbot_get('dyn_renewconfirm_report_tpl', "✅ <b>تمدید سرویس</b>\n<blockquote>▫️آیدی کاربر : {user_id}</blockquote>\n<blockquote>▫️نام کاربری سرویس : {username}</blockquote>\n<blockquote>▫️محصول : {product_name}</blockquote>\n<blockquote>▫️حجم : {volume} گیگ</blockquote>\n<blockquote>▫️زمان : {service_time} روز</blockquote>\n<blockquote>▫️مبلغ : {price} تومان</blockquote>\n<blockquote>▫️پنل : {panel_name}</blockquote>"), [
                 'user_id' => $this->user['id'],
-                'username' => $invoice['username'],
+                'username' => guardDisplayUsername($invoice['username'], $panel),
                 'product_name' => $product['name_product'],
                 'volume' => (int)$product['Volume_constraint'],
                 'service_time' => (int)$product['Service_time'],

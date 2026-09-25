@@ -309,6 +309,7 @@ final class PurchaseHandler extends BaseHandler
 
 
         $priceToCharge = (float) $product['price_product'];
+        $balanceBeforePurchase = (float) $this->user['Balance'];
         $balanceChargedAtomically = false;
         if ($priceToCharge > 0.0) {
             $agent = $this->user['agent'] ?? 'f';
@@ -378,7 +379,7 @@ final class PurchaseHandler extends BaseHandler
                 sendmessage($this->user['id'], faoxima_textbot_get('dyn_purchase_score_earned_1', '📌شما 1 امتیاز جدید کسب کردید.'), null, 'html');
                 update('user', 'score', (int)$this->user['score'] + 1, 'id', $this->user['id']);
             }
-            $this->reportPurchase($buyReport, $product, $panel, $usernameAc, $orderId, $invoiceCount);
+            $this->reportPurchase($buyReport, $product, $panel, $usernameAc, $orderId, $invoiceCount, $balanceBeforePurchase);
 
             $stockConfigs = ($stockContent !== '' && $stockContent !== $stockSubLink) ? [$stockContent] : [];
             $stockOutput = [];
@@ -520,7 +521,7 @@ final class PurchaseHandler extends BaseHandler
         }
 
         $template = $this->resolveTemplate($panel['type'] ?? '');
-        $template = str_replace('{username}', "<code>{$remote['username']}</code>", $template);
+        $template = str_replace('{username}', "<code>" . guardDisplayUsername($remote['username'], $panel) . "</code>", $template);
         $template = str_replace('{name_service}', $product['name_product'] ?? '', $template);
         $template = str_replace('{location}', $panel['name_panel'] ?? '', $template);
 
@@ -620,7 +621,7 @@ final class PurchaseHandler extends BaseHandler
         }
 
 
-        $this->reportPurchase($buyReport, $product, $panel, $usernameAc, $orderId, $invoiceCount);
+        $this->reportPurchase($buyReport, $product, $panel, $usernameAc, $orderId, $invoiceCount, $balanceBeforePurchase);
 
         FaoximaLogger::debug('Purchase completed', [
             'user_id'  => $this->user['id'],
@@ -662,6 +663,7 @@ final class PurchaseHandler extends BaseHandler
             'service'  => [
                 'id'                => $orderId,
                 'username'          => (string)($remote['username'] ?? $usernameAc),
+                'display_username'  => guardDisplayUsername((string)($remote['username'] ?? $usernameAc), $panel),
                 'username_requested' => $requestedUsernameAc,
                 'username_was_changed' => $usernameWasRenamed,
                 'status'            => 'active',
@@ -794,7 +796,7 @@ final class PurchaseHandler extends BaseHandler
         $keyboard = json_encode(['inline_keyboard' => $__kbPurchaseRows], JSON_UNESCAPED_UNICODE);
 
         try {
-            telegram('sendphoto', [
+            $photoResult = telegram('sendphoto', [
                 'chat_id'      => $this->user['id'],
                 'photo'        => new CURLFile($outPath),
                 'caption'      => $caption,
@@ -802,7 +804,11 @@ final class PurchaseHandler extends BaseHandler
                 'reply_markup' => $keyboard,
             ]);
             @unlink($outPath);
-            return true;
+            if (is_array($photoResult) && !empty($photoResult['ok'])) {
+                return true;
+            }
+            error_log('PurchaseHandler: info card rejected; falling back to service delivery (code ' . (int) ($photoResult['error_code'] ?? 0) . ').');
+            return false;
         } catch (Throwable $e) {
             @unlink($outPath);
             FaoximaLogger::warn('sendphoto (info card) failed', ['err' => $e->getMessage()]);
@@ -897,13 +903,13 @@ final class PurchaseHandler extends BaseHandler
         sendmessage($this->user['affiliates'], $textUser, null, 'HTML');
     }
 
-    private function reportPurchase(string $topicId, array $product, array $panel, string $usernameAc, string $orderId, int $invoiceCount): void
+    private function reportPurchase(string $topicId, array $product, array $panel, string $usernameAc, string $orderId, int $invoiceCount, float $balanceBeforePurchase): void
     {
         $balanceAfter = (float) FaoximaDb::fetchScalar(
             'SELECT Balance FROM user WHERE id = :id',
             [':id' => $this->user['id']]
         );
-        $balanceBefore = number_format((float)$this->user['Balance']);
+        $balanceBefore = number_format($balanceBeforePurchase);
         $balanceAfter  = number_format($balanceAfter);
 
         $firstBuy = $invoiceCount === 1 ? faoxima_textbot_get('dyn_purchase_first_buy_flag', '📌 خرید اول کاربر') : '';
@@ -913,7 +919,7 @@ final class PurchaseHandler extends BaseHandler
             'first_buy' => $firstBuy,
             'user_id' => $this->user['id'],
             'username' => $this->user['username'],
-            'config_username' => $usernameAc,
+            'config_username' => guardDisplayUsername($usernameAc, $panel),
             'panel_name' => $panel['name_panel'],
             'product_name' => $product['name_product'],
             'service_time' => $product['Service_time'],
@@ -971,4 +977,3 @@ final class PurchaseHandler extends BaseHandler
         ]);
     }
 }
-

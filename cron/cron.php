@@ -510,13 +510,6 @@ if ($bootstrapLoaded && function_exists('getCronJobDefinitions')) {
             continue;
         }
 
-        // Some upstream releases keep optional jobs in the database/UI after
-        // removing their endpoint. Do not generate repeated HTTP 404 requests.
-        $rxJobFile = realpath(__DIR__ . '/../cronbot/' . ltrim((string) $definition['script'], '/'));
-        if ($rxJobFile === false || !is_file($rxJobFile)) {
-            continue;
-        }
-
         $defaultConfig = $definition['default'] ?? ['unit' => 'minute', 'value' => 1];
         $schedule      = $schedules[$key] ?? $defaultConfig;
 
@@ -718,3 +711,4 @@ if (!$rxIsCli && !empty($dueTasks)) {
 
 $rxDispatchedTotal = $rxSuccessfulDispatches;
 echo "OK " . date('Y-m-d H:i:s') . " (Asia/Tehran) | dispatched=" . $rxDispatchedTotal . "\n";
+

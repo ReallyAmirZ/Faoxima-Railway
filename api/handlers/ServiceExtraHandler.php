@@ -208,9 +208,12 @@ final class ServiceExtraHandler extends BaseHandler
             ]);
 
             if ($balanceCharged) {
-                balance_atomic_credit($this->user['id'], $finalPrice);
-                if (function_exists('wallet_ledger_record')) {
-                    wallet_ledger_record($this->user['id'], 'credit', $finalPrice, 'refund', faoxima_textbot_get('dyn_serviceextra_refund_note', 'بازگشت وجه به دلیل خطا در سرویس اضافه'), $orderId, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                if (balance_atomic_credit($this->user['id'], $finalPrice)) {
+                    if (function_exists('wallet_ledger_record')) {
+                        wallet_ledger_record($this->user['id'], 'credit', $finalPrice, 'refund', faoxima_textbot_get('dyn_serviceextra_refund_note', 'بازگشت وجه به دلیل خطا در سرویس اضافه'), $orderId, 'invoice', (string)($invoice['id_invoice'] ?? ''));
+                    }
+                } else {
+                    FaoximaLogger::error('refund credit failed', ['user' => $this->user['id'], 'amount' => $finalPrice]);
                 }
             }
             $errorTitle = $kind === 'time'
@@ -220,7 +223,7 @@ final class ServiceExtraHandler extends BaseHandler
                 faoxima_render_text(faoxima_textbot_get('dyn_serviceextra_error_report_tpl', "{error_title}\n<blockquote>نام پنل : {panel_name}</blockquote>\n<blockquote>نام کاربری سرویس : {username}</blockquote>\n<blockquote>دلیل خطا : {reason}</blockquote>"), [
                     'error_title' => $errorTitle,
                     'panel_name' => $panel['name_panel'],
-                    'username' => $invoice['username'],
+                    'username' => guardDisplayUsername($invoice['username'], $panel),
                     'reason' => $reason,
                 ])
             );

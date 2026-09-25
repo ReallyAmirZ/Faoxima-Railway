@@ -15,6 +15,7 @@ RUN apt-get update \
         libssh2-1-dev \
         libxml2-dev \
         libzip-dev \
+        util-linux \
         openssl \
         unzip \
     && docker-php-ext-configure gd --with-jpeg --with-freetype \
@@ -40,6 +41,9 @@ RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' \
     && printf '\n<Directory /var/www/faoxima>\n    AllowOverride All\n    Require all granted\n</Directory>\nServerName 0.0.0.0\n' \
         > /etc/apache2/conf-available/faoxima.conf \
     && a2enconf faoxima
+
+COPY docker/railway-apache.conf /etc/apache2/conf-available/railway.conf
+RUN a2enconf railway
 
 COPY . /var/www/faoxima
 COPY docker/php/conf.d/faoxima.ini /usr/local/etc/php/conf.d/faoxima.ini

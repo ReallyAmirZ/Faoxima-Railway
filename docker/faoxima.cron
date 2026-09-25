@@ -1,1 +1,2 @@
-* * * * * www-data php /var/www/faoxima/cron/cron.php >/dev/null 2>&1
+FAOXIMA_DOCKER_ENV=1
+* * * * * root cd /var/www/faoxima && runuser -u www-data -- php cron/cron.php >>/proc/1/fd/1 2>>/proc/1/fd/2

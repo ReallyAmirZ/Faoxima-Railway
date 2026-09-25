@@ -411,7 +411,7 @@ function nm_sendServiceQrFallback($user_id, string $qrPayload, string $backgroun
         if (function_exists('addBackgroundImage')) {
             @addBackgroundImage($urlimage, $qrCode, $backgroundImage);
         }
-        telegram('sendphoto', [
+        $photoResult = telegram('sendphoto', [
             'chat_id'    => $user_id,
             'photo'      => new CURLFile($urlimage),
             'caption'    => $caption !== '' ? $caption : '📥 کیو‌آر کد',
@@ -419,8 +419,15 @@ function nm_sendServiceQrFallback($user_id, string $qrPayload, string $backgroun
             'reply_markup' => $replyMarkup,
         ]);
         @unlink($urlimage);
-        return true;
+        if (is_array($photoResult) && !empty($photoResult['ok'])) {
+            return true;
+        }
+        error_log('nm_sendServiceQrFallback: Telegram rejected QR image (code ' . (int) ($photoResult['error_code'] ?? 0) . ').');
+        return false;
     } catch (Throwable $e) {
+        if (isset($urlimage)) {
+            @unlink($urlimage);
+        }
         error_log('nm_sendServiceQrFallback failed: ' . $e->getMessage());
         return false;
     }

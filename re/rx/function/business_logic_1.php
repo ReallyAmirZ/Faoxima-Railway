@@ -584,7 +584,7 @@ function sendMessageService($panel_info, $config, $sub_link, $username_service, 
             }
             $cardKeyboard = json_encode($kb, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             try {
-                telegram('sendphoto', [
+                $photoResult = telegram('sendphoto', [
                     'chat_id'      => $user_id,
                     'photo'        => new CURLFile($cardPath),
                     'caption'      => $cleanCaption,
@@ -592,7 +592,10 @@ function sendMessageService($panel_info, $config, $sub_link, $username_service, 
                     'reply_markup' => $cardKeyboard,
                 ]);
                 @unlink($cardPath);
-                return;
+                if (is_array($photoResult) && !empty($photoResult['ok'])) {
+                    return;
+                }
+                error_log('sendMessageService: info card rejected; falling back to text (code ' . (int) ($photoResult['error_code'] ?? 0) . ').');
             } catch (Throwable $e) {
                 @unlink($cardPath);
                 error_log('sendMessageService info card send failed: ' . $e->getMessage());

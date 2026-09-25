@@ -16,7 +16,7 @@ if (is_readable($composerAutoload)) {
 require_once APP_ROOT_PATH . '/config.php';
 require_once __DIR__ . '/redis_client.php';
 
-ini_set('error_log', APP_ROOT_PATH . '/error_log');
+ini_set('error_log', getenv('FAOXIMA_DOCKER_ENV') === '1' ? '/proc/self/fd/2' : APP_ROOT_PATH . '/error_log');
 
 function getDatabaseConnection()
 {

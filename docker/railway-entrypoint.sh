@@ -13,6 +13,10 @@ case "$PORT_VALUE" in
         exit 1
         ;;
 esac
+if [ "$PORT_VALUE" -lt 1 ] || [ "$PORT_VALUE" -gt 65535 ]; then
+    echo "[railway] PORT must be between 1 and 65535." >&2
+    exit 1
+fi
 
 sed -ri "s/^Listen [0-9]+/Listen ${PORT_VALUE}/" /etc/apache2/ports.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:${PORT_VALUE}>/" /etc/apache2/sites-available/000-default.conf
@@ -81,8 +85,13 @@ if [ "${FAOXIMA_AUTO_MIGRATE:-1}" = "1" ]; then
     php "$APP_DIR/table.php"
 fi
 
+echo "[railway] Verifying Telegram webhook..."
+php "$APP_DIR/docker/railway-webhook.php"
+
 chown -R www-data:www-data "$APP_DIR/logs" "$APP_DIR/storage" "$APP_DIR/cron" "$APP_DIR/cronbot/.runtime" 2>/dev/null || true
 chmod 600 "$APP_DIR/config.php" 2>/dev/null || true
+chown www-data:www-data "$APP_DIR/config.php"
+apache2ctl -t
 
 cron
 

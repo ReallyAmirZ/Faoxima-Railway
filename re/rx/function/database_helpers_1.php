@@ -46,10 +46,11 @@ if (!function_exists('faoxima_bust_bot_selectcache')) {
             $password = (string) ($GLOBALS['redis_password'] ?? '');
             if ($password !== '') $client->auth($password);
             $client->select((int) ($GLOBALS['redis_database'] ?? 0));
-            $indexKey = 'faoxima:selectcache:tableindex:' . $table;
+            $rxKey = function_exists('rx_redis_key') ? 'rx_redis_key' : 'strval';
+            $indexKey = $rxKey('faoxima:selectcache:tableindex:' . $table);
             $members = $client->sMembers($indexKey);
             if (is_array($members) && !empty($members)) {
-                $client->del($members);
+                $client->del(array_map($rxKey, $members));
             }
             $client->del($indexKey);
             $client->close();
@@ -401,6 +402,7 @@ if (!function_exists('getCronJobDefinitions')) {
             'ip_block_notify' => ['script' => 'ip_block_notify.php', 'admin_label' => 'اطلاع مسدودشدن IP', 'instruction' => '📶 اطلاع‌رسانی مسدودشدن IP قبلی — %s', 'default' => ['unit' => 'minute', 'value' => 1]],
             'public_log_drain' => ['script' => 'public_log_drain.php', 'admin_label' => 'گزارش عمومی', 'instruction' => '📣 تخلیه صف گزارش عمومی خرید — %s', 'default' => ['unit' => 'minute', 'value' => 1]],
             'queued_renewal' => ['script' => 'QueuedRenewalProcessor.php', 'admin_label' => 'رزرو اشتراک', 'instruction' => '🔋 بررسی و فعال‌سازی رزروهای اشتراک — %s', 'default' => ['unit' => 'minute', 'value' => 5]],
+            'fx_rate_sync' => ['script' => 'fx_rate_sync.php', 'admin_label' => 'نرخ دلار (USDT)', 'instruction' => '💵 به‌روزرسانی نرخ USDT/IRT — %s', 'default' => ['unit' => 'minute', 'value' => 5]],
         ];
     }
 }

@@ -132,6 +132,12 @@ if (isset($update['pre_checkout_query'])) {
         sendmessage($from_id, $textbotlang['users']['erroroccurred'], $keyboard, 'html');
         return;
     }
+    $fxExternalRenewPanel = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
+    if (is_array($fxExternalRenewPanel)) {
+        $prodcut = fx_apply_to_product($prodcut, $fxExternalRenewPanel);
+        $prodcut['price_product'] = fx_finalize_amount($prodcut['price_product'], $fxExternalRenewPanel, 'product');
+        fx_quote_store($from_id, fx_quote_context_key('renew_external', (string) $username . '|' . (string) $codeproduct), fx_finalize_amount(fx_apply_user_discount($prodcut['price_product'], $user['pricediscount']), $fxExternalRenewPanel, 'product'), $fxExternalRenewPanel, 'product');
+    }
     $keyboardextend = json_encode([
         'inline_keyboard' => [
             [
@@ -140,7 +146,15 @@ if (isset($update['pre_checkout_query'])) {
         ]
     ]);
     $prodcutVolumeLabel = intval($prodcut['Volume_constraint']) == 0 ? $textbotlang['users']['stateus']['Unlimited'] : $prodcut['Volume_constraint'];
-    sendmessage($from_id, sprintf($textbotlang['users']['extend']['renewalinvoice'], $username, $prodcut['name_product'], $prodcut['price_product'], $prodcut['Service_time'], $prodcutVolumeLabel, $prodcut['note'], $user['Balance']), $keyboardextend, 'html');
+    $rxRenewPreview = rxRenewalPreviewForService($ManagePanel, select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select"), (string) $username, $prodcut['Volume_constraint'], $prodcut['Service_time']);
+    if (!empty($rxRenewPreview['blocked'])) {
+        $keyboardextend = null;
+    }
+    $rxRenewInvoiceText = sprintf($textbotlang['users']['extend']['renewalinvoice'], $username, $prodcut['name_product'], $prodcut['price_product'], $prodcut['Service_time'], $prodcutVolumeLabel, $prodcut['note'], $user['Balance']);
+    if ($rxRenewPreview['text'] !== '') {
+        $rxRenewInvoiceText .= "\n\n" . $rxRenewPreview['text'];
+    }
+    sendmessage($from_id, $rxRenewInvoiceText, $keyboardextend, 'html');
 } elseif (preg_match('/^confirmserivces-(.*)-(.*)/', $datain, $dataget)) {
     $codeproduct = $dataget[1];
     $usernamePanelExtends = $dataget[2];
@@ -164,6 +178,15 @@ if (isset($update['pre_checkout_query'])) {
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
     if ($marzban_list_get == false) {
         sendmessage($from_id, $textbotlang['users']['extend']['renewalerror'], $keyboard, 'HTML');
+        return;
+    }
+    $prodcut = fx_apply_to_product($prodcut, $marzban_list_get);
+    $prodcut['price_product'] = fx_finalize_amount($prodcut['price_product'], $marzban_list_get, 'product');
+    $fxExternalRenewKey = fx_quote_context_key('renew_external', (string) $usernamePanelExtends . '|' . (string) $codeproduct);
+    $fxExternalRenewAmount = fx_finalize_amount(fx_apply_user_discount($prodcut['price_product'], $user['pricediscount']), $marzban_list_get, 'product');
+    if (!fx_quote_check($from_id, $fxExternalRenewKey, $fxExternalRenewAmount, $marzban_list_get, 'product')) {
+        fx_quote_store($from_id, $fxExternalRenewKey, $fxExternalRenewAmount, $marzban_list_get, 'product');
+        sendmessage($from_id, fx_price_changed_text($fxExternalRenewAmount), json_encode(['inline_keyboard' => [[['text' => $textbotlang['users']['extend']['confirm'], 'callback_data' => "confirmserivces-" . $codeproduct . "-" . $usernamePanelExtends]]]]), 'HTML');
         return;
     }
     $nameloc = false;
@@ -196,6 +219,7 @@ if (isset($update['pre_checkout_query'])) {
                 $prodcut['price_product'] = $prodcut['price_product'] - $result;
                 sendmessage($from_id, sprintf($textbotlang['users']['Discount']['discountapplied'], $user['pricediscount']), null, 'HTML');
             }
+            $prodcut['price_product'] = fx_finalize_amount($prodcut['price_product'], $marzban_list_get, 'product');
             $Balance_prim = $prodcut['price_product'] - $user['Balance'];
             update("user", "Processing_value", $Balance_prim, "id", $from_id);
             sendmessage($from_id, $textbotlang['users']['sell']['None-credit'], $step_payment, 'HTML');
@@ -214,6 +238,7 @@ if (isset($update['pre_checkout_query'])) {
         $prodcut['price_product'] = $prodcut['price_product'] - $result;
         sendmessage($from_id, sprintf($textbotlang['users']['Discount']['discountapplied'], $user['pricediscount']), null, 'HTML');
     }
+    $prodcut['price_product'] = fx_finalize_amount($prodcut['price_product'], $marzban_list_get, 'product');
     if (function_exists('nmPanelNationalEnabled') && nmPanelNationalEnabled($marzban_list_get)) {
         if (!is_array($nameloc)) {
             sendmessage($from_id, $textbotlang['users']['extend']['renewalerror'], $keyboard, 'HTML');
@@ -285,7 +310,7 @@ if (isset($update['pre_checkout_query'])) {
     if ($extend['status'] == false) {
         $rxStockEmpty = ($extend['code'] ?? '') === 'manual_stock_empty';
         $rxQueuedExists = ($extend['code'] ?? '') === 'queued_renewal_exists';
-        $extend['msg'] = json_encode($extend['msg']);
+        $extend['msg'] = rx_panel_error_text($extend['msg'] ?? null, $extend['detail'] ?? null);
         $textreports = "خطای تمدید سرویس
         <blockquote>نام پنل : {$marzban_list_get['name_panel']}</blockquote>
         <blockquote>نام کاربری سرویس : $usernamePanelExtends</blockquote>
@@ -325,6 +350,7 @@ if (isset($update['pre_checkout_query'])) {
         "oldtime" => $DataUserOut['expire'],
         'code_product' => $prodcut['code_product'],
     ));
+    $value = fx_value_with_snapshot($value, fx_pricing_snapshot($marzban_list_get, 'product', $prodcut['fx_base_price'] ?? $prodcut['price_product'], $prodcut['price_product'], 0, ['product' => (string) ($prodcut['code_product'] ?? '')]));
     $dateacc = date('Y/m/d H:i:s');
     $type = "extends_not_user";
     $stmt->execute([
@@ -353,6 +379,7 @@ if (isset($update['pre_checkout_query'])) {
 ▫️نام محصول : {$prodcut['name_product']}
 ▫️مبلغ تمدید {$prodcut['price_product']} تومان
 ";
+        $textextend = rxRenewalDecorateSuccess($textextend, $extend, (string) $usernamePanelExtends, (string) ($marzban_list_get['name_panel'] ?? ''));
     }
     sendmessage($from_id, $textextend, $keyboard, 'HTML');
     if ($marzban_list_get['type'] == "Manualsale") {

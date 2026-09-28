@@ -2289,8 +2289,7 @@ if (!function_exists('rx_getKeyboardDefaultStyles')) {
                 "💡 ساخت نام کاربری"              => 'primary',
                 "🚨 محدودیت اکانت"               => 'success',
                 "📍 تغییر گروه"                => 'primary',
-                "⏳ زمان سرویس تست"                  => 'success',
-                "💾 حجم اکانت تست"                   => 'success',
+                "🧪 تنظیمات تست"                     => 'success',
                 "🌍 قیمت تغییر مکان"                => 'success',
                 "➕ قیمت حجم اضافه"                   => 'success',
                 "⏳ قیمت زمان اضافه"                  => 'success',
@@ -2963,7 +2962,7 @@ FaoximaWebhookAuth::enforce((string) ($APIKEY ?? ''));
 
 $update = $rx_update_probe;
 $update_id = $update['update_id'] ?? 0;
-if (isDuplicateUpdate($update_id)) {
+if (!defined('RX_DEFER_UPDATE_DEDUPE') && isDuplicateUpdate($update_id)) {
     if (!headers_sent()) {
         http_response_code(200);
     }

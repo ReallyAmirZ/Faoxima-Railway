@@ -1,17 +1,18 @@
-# Railway adaptation — 2026-09-25
+# Railway release — 2026-09-28
 
-Upstream: Mmd-Amir/Faoxima @ 8dddaa09fc76fb22699f8f1e4b7a4c2bb0619012 (1.1.1).
-Reference: x4gpanell/Faoxima @ 995a861659db66b2ca50e8d01a6a738b2c6f359b.
+Upstream: Mmd-Amir/Faoxima v1.1.5, commit 68eccf1981f1bd7f21c8000ad5fff198a0f6c175.
+The complete upstream snapshot is included, not merely the previous package with its version changed.
 
-- Retain current upstream application and bundled dependencies.
-- Dockerfile: PHP 8.2 Apache, required extensions, MySQL dump client, cron, one prefork MPM.
-- Read Railway DB references and bot credentials at startup; safely quote generated PHP values, including quotes, backslashes and dollar signs.
-- Serve from domain root, configure PORT, support forwarded HTTPS and directory URLs for panel/app.
-- Wait for MySQL, run upstream table.php migration, check Telegram webhook registration, then start Apache.
-- Run cron as www-data once per minute. Forward PHP web errors and cron stderr to Railway logs; cap Apache worker count.
-- Reject false success in bot info-card, QR fallback and Mini App photo delivery paths; preserve text delivery fallback.
-- Preserve the custom images.jpeg from the user's previous Railway package.
+Railway modifications are merged from the 2026-09-25 r2 package:
 
-The old reference fork embeds mysql.railway.internal in config.php and installer/index.php. This package reads the host through Variables so service renaming is supported. Installation is automatic rather than through the web installer.
+- PHP 8.2 Apache Dockerfile, single prefork MPM, dynamic PORT, Railway health endpoint.
+- Environment-based configuration with safe PHP quoting, DB readiness checks, upstream migrations and checked Telegram webhook registration.
+- Proxy-aware app/panel redirects and PHP stderr logging.
+- Cron with explicit runuser/PHP paths; absent optional cron scripts skipped.
+- Marzban/Pasarguard create accepts HTTP 200/201 only with a valid username; XUI checks successful response. Preserves upstream new rename/retry/error-detail logic.
+- Subscription fetch failure preserves original links instead of passing an array to explode.
+- Failed Telegram photo sends do not falsely count as successful delivery; existing text/button fallback remains available.
+- Mini App: six-second delay keeps the loading skeleton, thirty-second delay offers retry without claiming a module failure; genuine startup errors remain visible.
+- Preserves the user's existing Nexus images.jpeg from the previous Railway package.
 
-No live database, GitHub repository or Railway deployment has been modified while preparing this package.
+Credentials, database contents and production uploads are not included. Config values come from Railway Variables. Database migrations are the upstream table.php and can change data/schema; back up first. Do not run the VPS in-bot updater on this deployment.

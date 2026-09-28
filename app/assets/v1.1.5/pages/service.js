@@ -1410,10 +1410,12 @@ function renderRenewCustomForm($panel, opts, username, reload) {
     const $vol = $host.querySelector('#cv-volume');
     const $time = $host.querySelector('#cv-time');
     const $total = $host.querySelector('#cv-total');
+    const fxStep = Number(c.fx_round_step || 0);
+    const fxRound = (amount) => (fxStep > 0 && amount > 0 ? Math.ceil(amount / fxStep) * fxStep : amount);
     const recompute = () => {
         const v = Number($vol.value || 0);
         const d = Number($time.value || 0);
-        const t = (v * Number(c.price_per_gb || 0)) + (d * Number(c.price_per_day || 0));
+        const t = fxRound((v * Number(c.price_per_gb || 0)) + (d * Number(c.price_per_day || 0)));
         $total.textContent = `${fmtNum(t)} تومان`;
     };
     $vol.addEventListener('input', recompute);
@@ -1434,7 +1436,7 @@ function renderRenewCustomForm($panel, opts, username, reload) {
             toast(`زمان باید بین ${c.min_time_days} و ${c.max_time_days} روز باشد`, 'warn', 4000);
             return;
         }
-        const price = (v * Number(c.price_per_gb || 0)) + (d * Number(c.price_per_day || 0));
+        const price = fxRound((v * Number(c.price_per_gb || 0)) + (d * Number(c.price_per_day || 0)));
         const choice = {
             code: '__custom__',
             name: '⚙️ سرویس دلخواه',
@@ -1468,6 +1470,7 @@ function renderRenewConfirm($panel, opts, choice, username, reload) {
                 <span class="kv-label muted" style="font-size:12px">${m.split(' ')[0]}</span>
                 <span class="kv-value mono">${escapeHtml(m.replace(/<[^>]+>/g,'').trim())}</span>
             </div>`).join('')}
+            <div id="rc-preview" class="muted mt-sm" style="font-size:12px;white-space:pre-line">در حال دریافت پیش‌نمایش تمدید…</div>
             <div class="kv">
                 <span class="kv-label">${icon('coin')} مبلغ</span>
                 <span class="kv-value mono accent" style="font-size:18px;font-weight:700" id="rc-amount">${fmtNum(choice.price)} تومان</span>
@@ -1493,6 +1496,9 @@ function renderRenewConfirm($panel, opts, choice, username, reload) {
 
     let appliedDiscount = '';
     const basePrice = Number(choice.price || 0);
+    if (choice.fx_quote === undefined) {
+        choice.fx_quote = (choice.code === '__custom__' ? opts?.fx_quote?.custom : opts?.fx_quote?.product) || '';
+    }
     const $disc = $host.querySelector('#rc-discount');
     const $discApply = $host.querySelector('#rc-discount-apply');
     const $discMsg = $host.querySelector('#rc-discount-msg');
@@ -1528,6 +1534,25 @@ function renderRenewConfirm($panel, opts, choice, username, reload) {
 
     const $btn = $host.querySelector('#rc-submit');
     const $label = $btn.querySelector('.rc-label');
+    const $preview = $host.querySelector('#rc-preview');
+    $btn.disabled = true;
+    (async () => {
+        try {
+            const previewBody = { username };
+            if (choice.code === '__custom__') {
+                previewBody.custom = choice.custom;
+            } else {
+                previewBody.product_code = choice.code;
+            }
+            const pr = await call('service_renew_preview', { method: 'POST', body: previewBody });
+            const pobj = pr?.obj || {};
+            if ($preview) $preview.textContent = String(pobj.text || '');
+            $btn.disabled = !!pobj.blocked;
+        } catch (err) {
+            if ($preview) $preview.textContent = 'پیش‌نمایش تمدید دریافت نشد؛ مقادیر نهایی پس از تمدید اعلام می‌شود.';
+            $btn.disabled = false;
+        }
+    })();
 
     $btn.addEventListener('click', async () => {
         const shownAmount = $host.querySelector('#rc-amount')?.textContent || `${fmtNum(basePrice)} تومان`;
@@ -1546,6 +1571,9 @@ function renderRenewConfirm($panel, opts, choice, username, reload) {
             if (appliedDiscount) {
                 body.discount_code = appliedDiscount;
             }
+            if (choice.fx_quote) {
+                body.fx_quote = choice.fx_quote;
+            }
             const res = await call('service_renew_confirm', { method: 'POST', body });
             const obj = res?.obj || {};
             if (obj.kind === 'done') {
@@ -1555,7 +1583,7 @@ function renderRenewConfirm($panel, opts, choice, username, reload) {
                         <div class="empty">
                             ${icon('checkCircle', 'class="ico ico-xxl ico-success"')}
                             <h3>سرویس تمدید شد</h3>
-                            <p class="muted">${escapeHtml(obj.message || '')}</p>
+                            <p class="muted" style="white-space:pre-line">${escapeHtml(obj.message || '')}</p>
                             ${obj.cashback ? `<p class="muted mt-sm">🎉 ${fmtNum(obj.cashback)} تومان کش‌بک به حساب شما اضافه شد.</p>` : ''}
                             <p class="muted mono mt-sm" style="font-size:12px">موجودی جدید: ${fmtNum(obj.balance_after)} تومان</p>
                         </div>
@@ -1571,6 +1599,14 @@ function renderRenewConfirm($panel, opts, choice, username, reload) {
             toast(obj.message || 'انجام شد', 'success');
         } catch (err) {
             hapticNotify('error');
+            const fxObj = err && err.data && err.data.obj;
+            if (err && err.status === 409 && fxObj && fxObj.code === 'price_changed') {
+                choice.price = Number(fxObj.price || choice.price || 0);
+                choice.fx_quote = fxObj.fx_quote || '';
+                toast(`${err.message || ''} مبلغ جدید: ${fmtNum(choice.price)} تومان`, 'warn', 7000);
+                renderRenewConfirm($panel, opts, choice, username, reload);
+                return;
+            }
             const msg = err.message || 'خطا در تمدید سرویس';
             toast(msg, 'error', 5000);
             $btn.disabled = false;
@@ -1730,7 +1766,10 @@ async function renderExtraPanel($panel, info, username, kind, reload) {
 
     const minA = Number(q.min || 1);
     const maxA = Number(q.max || 9999);
-    const ppu = Number(q.price_per_unit || 0);
+    let ppu = Number(q.price_per_unit || 0);
+    let fxQuote = q.fx_quote || '';
+    let fxStep = Number(q.fx_round_step || 0);
+    const fxRound = (amount) => (fxStep > 0 && amount > 0 ? Math.ceil(amount / fxStep) * fxStep : amount);
 
     $host.innerHTML = `
         <p class="muted" style="font-size:13px">تعرفه هر ${unitLabel}: <span class="accent mono">${fmtNum(ppu)} تومان</span></p>
@@ -1769,7 +1808,7 @@ async function renderExtraPanel($panel, info, username, kind, reload) {
         discountedTotal = null;
         const $dmsg = $host.querySelector('#extra-discount-msg');
         if ($dmsg) $dmsg.style.display = 'none';
-        $total.textContent = `${fmtNum(a * ppu)} تومان`;
+        $total.textContent = `${fmtNum(fxRound(a * ppu))} تومان`;
     };
     $amount.addEventListener('input', recompute);
 
@@ -1787,7 +1826,7 @@ async function renderExtraPanel($panel, info, username, kind, reload) {
             try {
                 const r = await call('discount_validate', {
                     method: 'POST',
-                    body: { code, context: kind === 'time' ? 'time' : 'volume', username, base_price: a * ppu },
+                    body: { code, context: kind === 'time' ? 'time' : 'volume', username, base_price: fxRound(a * ppu) },
                 });
                 const obj = r?.obj || {};
                 appliedDiscount = code;
@@ -1803,7 +1842,7 @@ async function renderExtraPanel($panel, info, username, kind, reload) {
                 discountedTotal = null;
                 $discMsg.style.display = 'block';
                 $discMsg.textContent = err.message || 'کد تخفیف نامعتبر است';
-                $total.textContent = `${fmtNum(a * ppu)} تومان`;
+                $total.textContent = `${fmtNum(fxRound(a * ppu))} تومان`;
                 hapticNotify('error');
             } finally {
                 $discApply.disabled = false;
@@ -1825,11 +1864,13 @@ async function renderExtraPanel($panel, info, username, kind, reload) {
         $btn.disabled = true;
         $label.textContent = 'در حال انجام…';
         try {
+            const extraBody = appliedDiscount
+                ? { username, kind, amount: a, discount_code: appliedDiscount }
+                : { username, kind, amount: a };
+            if (fxQuote) extraBody.fx_quote = fxQuote;
             const res = await call('service_extra_confirm', {
                 method: 'POST',
-                body: appliedDiscount
-                    ? { username, kind, amount: a, discount_code: appliedDiscount }
-                    : { username, kind, amount: a },
+                body: extraBody,
             });
             const obj = res?.obj || {};
             if (obj.kind === 'done') {
@@ -1851,6 +1892,24 @@ async function renderExtraPanel($panel, info, username, kind, reload) {
             toast(obj.message || 'انجام شد', 'success');
         } catch (err) {
             hapticNotify('error');
+            const fxObj = err && err.data && err.data.obj;
+            if (err && err.status === 409 && fxObj && fxObj.code === 'price_changed') {
+                fxQuote = fxObj.fx_quote || '';
+                try {
+                    const fresh = await call('service_extra_quote', { params: { username, kind, amount: String(a) } });
+                    const fo = fresh?.obj || {};
+                    ppu = Number(fo.price_per_unit || ppu);
+                    fxStep = Number(fo.fx_round_step || 0);
+                    fxQuote = fo.fx_quote || fxQuote;
+                } catch (_) {  }
+                appliedDiscount = '';
+                discountedTotal = null;
+                $total.textContent = `${fmtNum(Number(fxObj.price || fxRound(a * ppu)))} تومان`;
+                toast(`${err.message || ''} مبلغ جدید: ${fmtNum(Number(fxObj.price || 0))} تومان`, 'warn', 7000);
+                $btn.disabled = false;
+                $label.textContent = old;
+                return;
+            }
             toast(err.message || 'خطا در افزودن', 'error', 5000);
             $btn.disabled = false;
             $label.textContent = old;

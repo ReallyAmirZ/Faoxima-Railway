@@ -30,7 +30,7 @@ $apiPath = $rootForApi === '/' ? '/api' : $rootForApi . '/api';
 
 $apiUrl = $apiPath;
 
-$brandAppVersion = trim((string)@file_get_contents(__DIR__ . '/version')) ?: '1.1.1';
+$brandAppVersion = trim((string)@file_get_contents(__DIR__ . '/version')) ?: '1.1.5';
 
 
 const FX_DEFAULT_BRAND_NAME = 'faoxima';
@@ -151,7 +151,7 @@ $sdkFallback = 'https://telegram.org/js/telegram-web-app.js';
 $cssUrl      = htmlspecialchars($assetPrefix . 'assets/css/app.css?v=' . fx_asset_v(__DIR__ . '/assets/css/app.css', $versionSafe, $hardR), ENT_QUOTES);
 
 
-$jsUrl       = htmlspecialchars($assetPrefix . 'assets/v1.1.1/app.js?v=' . fx_asset_v(__DIR__ . '/assets/v1.1.1/app.js', $versionSafe, $hardR), ENT_QUOTES);
+$jsUrl       = htmlspecialchars($assetPrefix . 'assets/v1.1.5/app.js?v=' . fx_asset_v(__DIR__ . '/assets/v1.1.5/app.js', $versionSafe, $hardR), ENT_QUOTES);
 ?>
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -262,6 +262,8 @@ $jsUrl       = htmlspecialchars($assetPrefix . 'assets/v1.1.1/app.js?v=' . fx_as
             return d.innerHTML;
         }
 
+        var startupFailed = false;
+
         function showFallback(title, msg, stack) {
             var view = document.getElementById('view');
             if (!view) return;
@@ -281,10 +283,13 @@ $jsUrl       = htmlspecialchars($assetPrefix . 'assets/v1.1.1/app.js?v=' . fx_as
         }
 
         window.addEventListener('error', function (e) {
+            // Unrelated image/style failures must not replace the application.
+            if (e.target && e.target !== window && e.target.tagName !== 'SCRIPT') return;
             var where = (e.filename || '') + ':' + (e.lineno || '?');
             var msg = (e.error && e.error.message) || e.message || 'Script error';
             var stack = (e.error && e.error.stack) || '';
             if (!window.__FAOXIMA_APP_STARTED__) {
+                startupFailed = true;
                 showFallback('خطا در بارگذاری برنامه', msg + ' (' + where + ')', stack);
             }
         }, true);
@@ -294,17 +299,25 @@ $jsUrl       = htmlspecialchars($assetPrefix . 'assets/v1.1.1/app.js?v=' . fx_as
             var msg = (r && r.message) || String(r || 'Unhandled rejection');
             var stack = (r && r.stack) || '';
             if (!window.__FAOXIMA_APP_STARTED__) {
+                startupFailed = true;
                 showFallback('خطا در بارگذاری برنامه', msg, stack);
             }
         });
 
 
         setTimeout(function () {
-            if (!window.__FAOXIMA_APP_STARTED__) {
-                showFallback('بارگذاری برنامه ناموفق بود',
-                    'یکی از فایل‌های JS بارگذاری نشد یا خطای پیوند ماژول داشت.', '');
+            if (!window.__FAOXIMA_APP_STARTED__ && !startupFailed) {
+                var status = document.getElementById('fx-boot-status');
+                if (status) status.textContent = 'بارگذاری کمی طول کشیده؛ لطفاً منتظر بمانید…';
             }
         }, 6000);
+
+        setTimeout(function () {
+            if (!window.__FAOXIMA_APP_STARTED__ && !startupFailed) {
+                showFallback('بارگذاری طول کشیده است',
+                    'هنوز منتظر دریافت فایل‌های برنامه هستیم. اتصال اینترنت را بررسی کنید؛ می‌توانید منتظر بمانید یا دوباره تلاش کنید.', '');
+            }
+        }, 30000);
     })();
 </script>
 </head>
@@ -419,7 +432,7 @@ $jsUrl       = htmlspecialchars($assetPrefix . 'assets/v1.1.1/app.js?v=' . fx_as
                     <div class="skeleton skeleton-row"></div>
                     <div class="skeleton skeleton-row"></div>
                     <div class="skeleton skeleton-row"></div>
-                    <p class="muted center mono mt-md" style="font-size:11px">در حال آماده‌سازی…</p>
+                    <p id="fx-boot-status" class="muted center mono mt-md" style="font-size:11px">در حال آماده‌سازی…</p>
                 </div>
             </article>
         </main>

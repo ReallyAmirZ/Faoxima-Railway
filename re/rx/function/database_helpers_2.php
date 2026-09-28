@@ -1403,13 +1403,377 @@ function trnado($order_id, $price)
     return $decodedResponse;
 }
 
+function tonpayRateLimitStatePath()
+{
+    $root = defined('REFACTORED_LEGACY_ROOT') ? REFACTORED_LEGACY_ROOT
+          : (defined('APP_ROOT_PATH') ? APP_ROOT_PATH : dirname(__DIR__, 3));
+    $runtime = $root . DIRECTORY_SEPARATOR . 'cronbot' . DIRECTORY_SEPARATOR . '.runtime';
+    if (@is_dir($runtime) || @mkdir($runtime, 0775, true) || @is_dir($runtime)) {
+        return $runtime . DIRECTORY_SEPARATOR . 'tonpay_ratelimit.json';
+    }
+    return sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'rx_tonpay_ratelimit_' . md5((string) $root) . '.json';
+}
+
+function tonpayRateLimitRedisEval($script, array $keys, array $args)
+{
+    if (!function_exists('getRedisConnection')) {
+        return null;
+    }
+    $client = getRedisConnection();
+    if ($client === null) {
+        return null;
+    }
+    $keys = array_map('rx_redis_key', array_values($keys));
+    try {
+        if ($client instanceof \Redis) {
+            $result = $client->eval($script, array_merge($keys, $args), count($keys));
+        } else {
+            $result = $client->eval($script, count($keys), ...array_merge($keys, $args));
+        }
+    } catch (\Throwable $e) {
+        if (function_exists('rx_redis_mark_unavailable')) {
+            rx_redis_mark_unavailable('exception');
+        }
+        return null;
+    }
+    return ($result === false || $result === null) ? null : (int) $result;
+}
+
+function tonpayRateLimitFileMutate(callable $mutator)
+{
+    $path = tonpayRateLimitStatePath();
+    $isNew = !is_file($path);
+    $fh = @fopen($path, 'c+');
+    if ($fh === false) {
+        return null;
+    }
+    if ($isNew) {
+        @chmod($path, 0664);
+    }
+    if (!@flock($fh, LOCK_EX)) {
+        @fclose($fh);
+        return null;
+    }
+    $state = json_decode((string) stream_get_contents($fh), true);
+    if (!is_array($state)) {
+        $state = [];
+    }
+    $result = $mutator($state);
+    @ftruncate($fh, 0);
+    @rewind($fh);
+    @fwrite($fh, (string) json_encode($state));
+    @fflush($fh);
+    @flock($fh, LOCK_UN);
+    @fclose($fh);
+    return $result;
+}
+
+function tonpayRateLimitAcquire()
+{
+    $limit = 50;
+    $windowMs = 60000;
+    $nowMs = (int) floor(microtime(true) * 1000);
+
+    $script = "local now = tonumber(ARGV[1]) "
+        . "local blocked = tonumber(redis.call('get', KEYS[2]) or '0') or 0 "
+        . "if blocked > now then return 0 end "
+        . "redis.call('zremrangebyscore', KEYS[1], '-inf', now - tonumber(ARGV[2])) "
+        . "if redis.call('zcard', KEYS[1]) >= tonumber(ARGV[3]) then return 0 end "
+        . "redis.call('zadd', KEYS[1], now, ARGV[4]) "
+        . "redis.call('pexpire', KEYS[1], tonumber(ARGV[2])) "
+        . "return 1";
+    $member = $nowMs . ':' . bin2hex(random_bytes(4));
+    $redisResult = tonpayRateLimitRedisEval(
+        $script,
+        ['faoxima:tonpay:ratelimit:window', 'faoxima:tonpay:ratelimit:blocked'],
+        [$nowMs, $windowMs, $limit, $member]
+    );
+    if ($redisResult !== null) {
+        return $redisResult === 1;
+    }
+
+    $fileResult = tonpayRateLimitFileMutate(function (array &$state) use ($limit, $windowMs, $nowMs) {
+        if ((int) ($state['blocked_until'] ?? 0) > $nowMs) {
+            return false;
+        }
+        $hits = [];
+        foreach ((array) ($state['hits'] ?? []) as $hit) {
+            if ((int) $hit > $nowMs - $windowMs) {
+                $hits[] = (int) $hit;
+            }
+        }
+        if (count($hits) >= $limit) {
+            $state['hits'] = $hits;
+            return false;
+        }
+        $hits[] = $nowMs;
+        $state['hits'] = $hits;
+        return true;
+    });
+    if ($fileResult === null) {
+        error_log('TonPay rate limiter storage unavailable; request allowed without local accounting');
+        return true;
+    }
+    return $fileResult;
+}
+
+function tonpayRateLimitBlock($seconds)
+{
+    $seconds = max(1, min(600, (int) $seconds));
+    $untilMs = (int) floor(microtime(true) * 1000) + ($seconds * 1000);
+
+    $script = "local cur = tonumber(redis.call('get', KEYS[1]) or '0') or 0 "
+        . "if tonumber(ARGV[1]) > cur then redis.call('set', KEYS[1], ARGV[1], 'PX', tonumber(ARGV[2])) end "
+        . "return 1";
+    if (tonpayRateLimitRedisEval($script, ['faoxima:tonpay:ratelimit:blocked'], [$untilMs, $seconds * 1000]) !== null) {
+        return;
+    }
+
+    tonpayRateLimitFileMutate(function (array &$state) use ($untilMs) {
+        if ($untilMs > (int) ($state['blocked_until'] ?? 0)) {
+            $state['blocked_until'] = $untilMs;
+        }
+        return true;
+    });
+}
+
+function tonpayParseRetryAfter($value)
+{
+    $value = trim((string) $value);
+    if ($value === '') {
+        return 60;
+    }
+    if (ctype_digit($value)) {
+        return (int) $value;
+    }
+    $ts = strtotime($value);
+    return $ts === false ? 60 : max(1, $ts - time());
+}
+
+function tonpayErrorCode($decoded)
+{
+    $detail = is_array($decoded) ? ($decoded['detail'] ?? null) : null;
+    if (is_array($detail) && isset($detail['code']) && is_scalar($detail['code'])) {
+        return trim((string) $detail['code']);
+    }
+    return '';
+}
+
+function tonpayNormalizeError($decoded, $fallbackMessage)
+{
+    $statusCode = is_array($decoded) ? (int) ($decoded['status_code'] ?? 0) : 0;
+    $detail = is_array($decoded) ? ($decoded['detail'] ?? null) : null;
+    $code = tonpayErrorCode($decoded);
+    $message = '';
+    if (is_array($detail)) {
+        if (isset($detail['message']) && is_scalar($detail['message'])) {
+            $message = trim((string) $detail['message']);
+        } elseif (isset($detail[0]['msg']) && is_scalar($detail[0]['msg'])) {
+            $message = trim((string) $detail[0]['msg']);
+        }
+    } elseif (is_scalar($detail)) {
+        $message = trim((string) $detail);
+    }
+    if ($code === '' && $statusCode === 429) {
+        $code = 'RATE_LIMIT_EXCEEDED';
+    }
+    return [
+        'success' => false,
+        'error_code' => $code,
+        'error' => $message !== '' ? $message : (string) $fallbackMessage,
+        'status_code' => $statusCode,
+        'rate_limited' => $code === 'RATE_LIMIT_EXCEEDED',
+    ];
+}
+
+function tonpayIsRateLimited($response)
+{
+    if (!is_array($response)) {
+        return false;
+    }
+    return !empty($response['rate_limited'])
+        || (int) ($response['status_code'] ?? 0) === 429
+        || tonpayErrorCode($response) === 'RATE_LIMIT_EXCEEDED'
+        || (string) ($response['error_code'] ?? '') === 'RATE_LIMIT_EXCEEDED';
+}
+
+function tonpayRedactUrl($url)
+{
+    $url = (string) $url;
+    $cut = strcspn($url, '?#');
+    return $cut < strlen($url) ? substr($url, 0, $cut) . '?[redacted]' : $url;
+}
+
+function tonpayMaskSecret($secret)
+{
+    $secret = trim((string) $secret);
+    $length = strlen($secret);
+    if ($length === 0) {
+        return '';
+    }
+    if ($length < 12) {
+        return str_repeat('•', 6);
+    }
+    return substr($secret, 0, 4) . '…' . substr($secret, -4);
+}
+
+function tonpayNormalizeBuyerChatId($buyerChatId)
+{
+    if (is_int($buyerChatId)) {
+        return $buyerChatId > 0 ? $buyerChatId : null;
+    }
+    if (is_string($buyerChatId)) {
+        $buyerChatId = trim($buyerChatId);
+        if ($buyerChatId !== '' && strlen($buyerChatId) <= 15 && ctype_digit($buyerChatId) && (int) $buyerChatId > 0) {
+            return (int) $buyerChatId;
+        }
+    }
+    return null;
+}
+
+function tonpayValidPaymentUrl($url)
+{
+    if (!is_string($url)) {
+        return '';
+    }
+    $url = trim($url);
+    if ($url === '' || filter_var($url, FILTER_VALIDATE_URL) === false) {
+        return '';
+    }
+    return strtolower((string) parse_url($url, PHP_URL_SCHEME)) === 'https' ? $url : '';
+}
+
+function tonpayPaymentMode()
+{
+    $row = select("PaySetting", "ValuePay", "NamePay", "tonpay_payment_mode", "select");
+    $mode = is_array($row) ? strtolower(trim((string) ($row['ValuePay'] ?? ''))) : '';
+    return $mode === 'web' ? 'web' : 'bot';
+}
+
+function tonpaySelectPaymentUrl($botUrl, $webUrl, $logOrderId = null)
+{
+    $botUrl = is_scalar($botUrl) ? trim((string) $botUrl) : '';
+    $webUrl = tonpayValidPaymentUrl($webUrl);
+    if (tonpayPaymentMode() !== 'web') {
+        return $botUrl;
+    }
+    if ($webUrl !== '') {
+        return $webUrl;
+    }
+    if ($logOrderId !== null) {
+        error_log('TonPay web payment url missing, falling back to bot url: ' . json_encode([
+            'order_id' => (string) $logOrderId,
+            'has_bot_url' => $botUrl !== '',
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+    return $botUrl;
+}
+
+function tonpayStoreWebInvoiceUrl($orderId, $webUrl)
+{
+    global $pdo;
+    $webUrl = tonpayValidPaymentUrl($webUrl);
+    if ($webUrl === '' || !($pdo instanceof PDO)) {
+        return false;
+    }
+    try {
+        $stmt = $pdo->prepare("UPDATE Payment_report SET tonpay_web_invoice_url = ? WHERE id_order = ?");
+        $stmt->execute([$webUrl, (string) $orderId]);
+        return true;
+    } catch (Throwable $e) {
+        error_log('TonPay store web invoice url failed: ' . json_encode([
+            'order_id' => (string) $orderId,
+            'error' => $e->getMessage(),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return false;
+    }
+}
+
+function tonpayAmountsMatch($requestAmount, $expectedPrice)
+{
+    if (!is_numeric($requestAmount) || !is_numeric($expectedPrice)) {
+        return false;
+    }
+    $received = (float) $requestAmount;
+    $expected = (float) $expectedPrice;
+    if ($received != floor($received) || $expected != floor($expected)) {
+        return false;
+    }
+    return (int) $received === (int) $expected;
+}
+
+function tonpayLogAmountMismatch($source, $orderId, $invoiceId, $expectedPrice, $requestAmount)
+{
+    error_log('TonPay amount mismatch: ' . json_encode([
+        'source' => (string) $source,
+        'order_id' => (string) $orderId,
+        'invoice_id' => (string) $invoiceId,
+        'expected_amount' => is_scalar($expectedPrice) ? (string) $expectedPrice : null,
+        'received_request_amount' => is_scalar($requestAmount) ? (string) $requestAmount : null,
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+}
+
+function tonpayTerminalLocalStatus($remoteStatus)
+{
+    $map = [
+        'expired' => 'expire',
+        'canceled' => 'cancelled',
+        'cancelled' => 'cancelled',
+        'rejected' => 'reject',
+    ];
+    $remoteStatus = strtolower(trim(is_scalar($remoteStatus) ? (string) $remoteStatus : ''));
+    return $map[$remoteStatus] ?? null;
+}
+
+function tonpaySyncTerminalStatus($orderId, $remoteStatus)
+{
+    global $pdo;
+    $localStatus = tonpayTerminalLocalStatus($remoteStatus);
+    if ($localStatus === null || !($pdo instanceof PDO)) {
+        return false;
+    }
+    try {
+        $stmt = $pdo->prepare(
+            "UPDATE Payment_report
+                SET payment_Status = ?
+              WHERE id_order = ?
+                AND Payment_Method = 'tonpay'
+                AND payment_Status IN ('Unpaid','pending','waiting')"
+        );
+        $stmt->execute([$localStatus, (string) $orderId]);
+        return $stmt->rowCount() > 0;
+    } catch (Throwable $e) {
+        error_log('TonPay terminal status sync failed: ' . json_encode([
+            'order_id' => (string) $orderId,
+            'error' => $e->getMessage(),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return false;
+    }
+}
+
 function tonpayCurlJson($method, $endpoint, array $payload, $apiKey)
 {
+    if (!tonpayRateLimitAcquire()) {
+        error_log('TonPay request skipped by local rate limiter: ' . json_encode([
+            'url' => $endpoint,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return [
+            'detail' => [
+                'code' => 'RATE_LIMIT_EXCEEDED',
+                'message' => 'سقف درخواست‌های تون‌پی موقتاً پر شده است؛ لطفاً کمی بعد دوباره تلاش کنید',
+            ],
+            'status_code' => 429,
+            'rate_limited' => true,
+            'local_rate_limited' => true,
+        ];
+    }
+
     $headers = ['Content-Type: application/json'];
     if ($apiKey !== null) {
         $headers[] = 'X-API-Key: ' . $apiKey;
     }
 
+    $retryAfter = '';
     $curl = curl_init();
     $opts = array(
         CURLOPT_URL => $endpoint,
@@ -1422,6 +1786,12 @@ function tonpayCurlJson($method, $endpoint, array $payload, $apiKey)
         CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
         CURLOPT_CUSTOMREQUEST => $method,
         CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_HEADERFUNCTION => function ($ch, $headerLine) use (&$retryAfter) {
+            if (stripos($headerLine, 'Retry-After:') === 0) {
+                $retryAfter = trim(substr($headerLine, strlen('Retry-After:')));
+            }
+            return strlen($headerLine);
+        },
     );
     if ($method === 'POST') {
         $opts[CURLOPT_POSTFIELDS] = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -1445,6 +1815,18 @@ function tonpayCurlJson($method, $endpoint, array $payload, $apiKey)
     }
 
     $decoded = json_decode($response, true);
+    if ((int) $statusCode === 429 || tonpayErrorCode($decoded) === 'RATE_LIMIT_EXCEEDED') {
+        tonpayRateLimitBlock(tonpayParseRetryAfter($retryAfter));
+        error_log('TonPay rate limit response: ' . json_encode([
+            'url' => $endpoint,
+            'status_code' => $statusCode,
+            'retry_after' => $retryAfter,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        if (!is_array($decoded)) {
+            $decoded = ['detail' => ['code' => 'RATE_LIMIT_EXCEEDED', 'message' => 'Rate limit exceeded']];
+        }
+        $decoded['rate_limited'] = true;
+    }
     if (!is_array($decoded)) {
         error_log('TonPay invalid response: ' . json_encode([
             'url' => $endpoint,
@@ -1463,7 +1845,7 @@ function tonpayApiKey()
     return trim((string) select("PaySetting", "*", "NamePay", "apitonpay", "select")['ValuePay']);
 }
 
-function tonpayCreateInvoice($order_id, $amount)
+function tonpayCreateInvoice($order_id, $amount, $buyer_chat_id = null)
 {
     global $domainhosts;
 
@@ -1472,6 +1854,8 @@ function tonpayCreateInvoice($order_id, $amount)
         return [
             'success' => false,
             'error' => 'کلید API تون‌پی تنظیم نشده است',
+            'error_code' => 'MISSING_API_KEY',
+            'status_code' => 0,
         ];
     }
 
@@ -1481,20 +1865,31 @@ function tonpayCreateInvoice($order_id, $amount)
         'order_id' => (string) $order_id,
         'callback_url' => $callbackUrl,
     ];
+    $buyerChatId = tonpayNormalizeBuyerChatId($buyer_chat_id);
+    if ($buyerChatId !== null) {
+        $requestPayload['buyer_chat_id'] = $buyerChatId;
+    }
 
     $endpoint = 'https://tonpays.online/api/v1/invoices/create';
     $decoded = tonpayCurlJson('POST', $endpoint, $requestPayload, $apiKey);
 
-    if (!is_array($decoded) || empty($decoded['invoice_id']) || empty($decoded['invoice_url'])) {
-        $errorPayload = [
-            'success' => false,
-            'error' => is_array($decoded) ? ($decoded['detail'] ?? 'پاسخ نامعتبر از سرویس تون‌پی') : 'پاسخ نامعتبر از سرویس تون‌پی',
-            'raw' => $decoded,
-        ];
-        error_log('TonPay create invoice failed: ' . json_encode($errorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    $invoiceId = is_array($decoded) && is_scalar($decoded['invoice_id'] ?? null) ? trim((string) $decoded['invoice_id']) : '';
+    $invoiceUrl = is_array($decoded) && is_scalar($decoded['invoice_url'] ?? null) ? trim((string) $decoded['invoice_url']) : '';
+    if ($invoiceId === '' || $invoiceUrl === '') {
+        $errorPayload = tonpayNormalizeError($decoded, 'پاسخ نامعتبر از سرویس تون‌پی');
+        error_log('TonPay create invoice failed: ' . json_encode([
+            'order_id' => (string) $order_id,
+            'status_code' => $errorPayload['status_code'],
+            'error_code' => $errorPayload['error_code'],
+            'error' => $errorPayload['error'],
+            'buyer_chat_id_sent' => $buyerChatId !== null,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         return $errorPayload;
     }
 
+    $decoded['invoice_id'] = $invoiceId;
+    $decoded['invoice_url'] = $invoiceUrl;
+    $decoded['web_invoice_url'] = tonpayValidPaymentUrl($decoded['web_invoice_url'] ?? null);
     return $decoded;
 }
 
@@ -2629,10 +3024,19 @@ if (!function_exists('rxEnsurePaymentRuntime')) {
         }
     }
 }
-function DirectPayment($order_id, $image = 'images.jpg')
+function DirectPayment($order_id, $image = 'images.jpg', $rxToken = null)
 {
     global $pdo, $ManagePanel, $textbotlang, $keyboardextendfnished, $keyboard, $Confirm_pay, $from_id, $message_id, $datatextbot, $update;
     rxEnsurePaymentRuntime();
+    $order_id = (string) $order_id;
+    $rxPf = rx_pf_begin($order_id, $rxToken !== null ? (string) $rxToken : null);
+    if (empty($rxPf['proceed'])) {
+        return $rxPf['result'];
+    }
+    $rxToken = (string) $rxPf['token'];
+    $rxPhase = (string) $rxPf['phase'];
+    $rxBeforeState = rx_pf_decode($rxPf['record']['before_state'] ?? null);
+    $rxTargetState = rx_pf_decode($rxPf['record']['target_state'] ?? null);
     $buyreport =select("topicid", "idreport", "report", "buyreport", "select")['idreport'];
     $admin_ids = select("admin", "id_admin", null, null, "FETCH_COLUMN");
     $otherservice = select("topicid", "idreport", "report", "otherservice", "select")['idreport'];
@@ -2640,7 +3044,10 @@ function DirectPayment($order_id, $image = 'images.jpg')
     $errorreport = select("topicid", "idreport", "report", "errorreport", "select")['idreport'];
     $porsantreport = select("topicid", "idreport", "report", "porsantreport", "select")['idreport'];
     $setting = select("setting", "*");
-    $Payment_report = select("Payment_report", "*", "id_order", $order_id, "select");
+    $Payment_report = select("Payment_report", "*", "id_order", $order_id, "select", ['cache' => false]);
+    if (!is_array($Payment_report)) {
+        return rx_pf_abort($order_id, $rxToken, 'payment_report_unavailable', true);
+    }
     $_receipt_report_chat = trim((string)($Payment_report['report_chat_id'] ?? ''));
     $_receipt_report_msg = (int)($Payment_report['report_message_id'] ?? 0);
     $_receipt_report_thread = (int)($Payment_report['report_thread_id'] ?? 0);
@@ -2683,7 +3090,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
             if (function_exists('error_log')) {
                 @error_log("[DirectPayment] invoice lookup error for order={$order_id} user={$Balance_id['id']} steppay[1]={$__invUsername} — retryable");
             }
-            return ['success' => false, 'retryable' => true, 'reason' => 'invoice_lookup_error'];
+            return rx_pf_abort($order_id, $rxToken, 'invoice_lookup_error', true);
         }
         if (!$get_invoice) {
             if (function_exists('error_log')) {
@@ -2704,7 +3111,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     'parse_mode' => 'HTML',
                 ]);
             }
-            return ['success' => false, 'retryable' => false, 'reason' => 'invoice_not_found'];
+            return rx_pf_abort($order_id, $rxToken, 'invoice_not_found', false);
         }
         $userAgent = $Balance_id['agent'] ?? 'f';
         $stmt = $pdo->prepare("SELECT * FROM product WHERE name_product = :name AND (FIND_IN_SET(:loc, Location) > 0 OR Location = '/all') AND (FIND_IN_SET(:agent, REPLACE(agent, ' ', '')) > 0 OR agent IN ('all', 'allusers'))");
@@ -2748,7 +3155,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     'parse_mode' => 'HTML',
                 ]);
             }
-            return;
+            return rx_pf_abort($order_id, $rxToken, 'panel_not_found', true);
         }
 
         // [idempotent-refund guard] اگر این فاکتور قبلاً refund خورده (نشانه auto-refund تو dec_not_confirmed)،
@@ -2763,12 +3170,15 @@ function DirectPayment($order_id, $image = 'images.jpg')
             }
         } catch (Throwable $__e) { $__alreadyRefunded = false; }
         if ($__alreadyRefunded) {
-            return;
+            return rx_pf_abort($order_id, $rxToken, 'already_refunded', false);
         }
 
         // [username normalize] اگر یوزرنیم فاکتور خالی/کوتاه‌تر از 3 کاراکتر بود، یکی معتبر بساز.
         // این از خطای پنل "Username must be at least 3 characters long" جلوگیری می‌کنه.
         if (!is_string($username_ac) || trim($username_ac) === '' || strlen(trim($username_ac)) < 3) {
+            if ($rxPhase === 'reconcile') {
+                return rx_pf_manual_review($order_id, $rxToken, 'buy_username_changed_during_reconciliation', ['username' => (string) $username_ac]);
+            }
             $username_ac = preg_replace('/[^A-Za-z0-9-]/', '', str_replace('_', '-', (string)$Balance_id['id'])) . '-' . bin2hex(random_bytes(4));
             if (strlen($username_ac) < 3) $username_ac = 'u' . bin2hex(random_bytes(4));
             // فقط وقتی id_invoice معتبره update کن (جلوی خطای "Column id_invoice cannot be null" گرفته میشه)
@@ -2799,12 +3209,19 @@ function DirectPayment($order_id, $image = 'images.jpg')
             'type' => 'buy'
         );
         if (function_exists('nmPanelNationalEnabled') && nmPanelNationalEnabled($marzban_list_get)) {
+            if ($rxPhase === 'reconcile') {
+                return rx_pf_manual_review($order_id, $rxToken, 'national_stock_buy_unverifiable', ['username' => (string) $username_ac]);
+            }
+            if (!rx_pf_prepare($order_id, $rxToken, null, ['national_stock' => true, 'username' => (string) $username_ac])) {
+                return rx_pf_abort($order_id, $rxToken, 'fulfillment_prepare_failed', true);
+            }
             if (is_array($info_product) && nmStockCompleteBuyFromInventory($Balance_id['id'], $Balance_id, $marzban_list_get, $info_product, $get_invoice['id_invoice'], $username_ac, false, 'paid_national_buy')) {
-                sendmessage($Balance_id['id'], $textbotlang['users']['selectoption'], $keyboard, 'HTML');
-                if (function_exists('update')) {
-                    update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
+                $rxCompletion = rx_pf_complete($order_id, $rxToken, ['national_stock' => true, 'username' => (string) $username_ac]);
+                if ($rxCompletion !== 'completed') {
+                    return rx_pf_completion_outcome($order_id, $rxToken, $rxCompletion);
                 }
-                return;
+                sendmessage($Balance_id['id'], $textbotlang['users']['selectoption'], $keyboard, 'HTML');
+                return rx_pf_result('completed', 'national_stock');
             }
             $__refundNs = rx_refund_payment_once($order_id, $Balance_id['id'], $Payment_report['price'], 'بازگشت وجه - موجودی انبار ملی تمام شده', (string)$get_invoice['id_invoice']);
             if ($__refundNs === 'refunded') {
@@ -2812,7 +3229,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
             } elseif ($__refundNs === 'failed') {
                 sendmessage($Balance_id['id'], "❌ موجودی انبار برای این محصول تمام شده است. بازگشت وجه با خطا مواجه شد؛ لطفاً با پشتیبانی در ارتباط باشید.", $keyboard, 'HTML');
             }
-            return;
+            return rx_pf_fail($order_id, $rxToken, 'national_stock_empty', $__refundNs);
         }
         // [zombie-rescue] قبل از تلاش جدید، اگه قبلاً تو panel یوزری برای این کاربر ساخته شده (zombie)،
         // اول بررسی کن: شاید createUser تو call قبلی موفق بوده فقط response نرسیده. اگه پیدا کردیم،
@@ -2822,16 +3239,48 @@ function DirectPayment($order_id, $image = 'images.jpg')
             if (function_exists('rx_log_event')) {
                 rx_log_event('DIRECT_PAYMENT_NO_MANAGE_PANEL', 'ManagePanel unavailable; buy aborted without side effects', ['id_order' => $order_id]);
             }
-            return;
+            return rx_pf_abort($order_id, $rxToken, 'manage_panel_unavailable', true);
         }
+        $rxReconcilable = rx_pf_panel_reconcilable($marzban_list_get);
+        $rxAllowRename = true;
         $__isRetryCall = false;
-        try {
-            $__pr2 = select("Payment_report", "crypto_check_count", "id_order", $order_id, "select");
-            $__cnt = is_array($__pr2) ? (int)($__pr2['crypto_check_count'] ?? 0) : 0;
-            if ($__cnt >= 1) $__isRetryCall = true;
-        } catch (Throwable $__e) { /* ignore */ }
-
         $dataoutput = null;
+        if ($rxPhase === 'reconcile') {
+            $rxExpectedUser = is_array($rxTargetState) ? (string) ($rxTargetState['username'] ?? '') : '';
+            if (!$rxReconcilable || !is_array($rxBeforeState) || ($rxBeforeState['exists'] ?? null) !== false || $rxExpectedUser === '' || $rxExpectedUser !== (string) $username_ac) {
+                return rx_pf_manual_review($order_id, $rxToken, 'buy_result_unverifiable', ['username' => (string) $username_ac]);
+            }
+            $rxSnap = rx_pf_panel_snapshot($ManagePanel, (string) $marzban_list_get['name_panel'], (string) $username_ac);
+            if (empty($rxSnap['ok'])) {
+                return rx_pf_defer($order_id, $rxToken, 'buy_panel_read_failed: ' . (string) ($rxSnap['error'] ?? ''));
+            }
+            if (!empty($rxSnap['exists'])) {
+                $dataoutput = rx_pf_adopt_created($rxSnap['raw']);
+            } elseif (!rx_pf_mark_applying($order_id, $rxToken)) {
+                return rx_pf_result('already_processing', 'ownership_lost');
+            } else {
+                $rxAllowRename = false;
+            }
+        } else {
+            $rxBeforeState = ['username' => (string) $username_ac, 'exists' => null];
+            if ($rxReconcilable) {
+                $rxSnap = rx_pf_panel_snapshot($ManagePanel, (string) $marzban_list_get['name_panel'], (string) $username_ac);
+                if (empty($rxSnap['ok'])) {
+                    return rx_pf_abort($order_id, $rxToken, 'buy_panel_read_failed', true);
+                }
+                $rxBeforeState['exists'] = !empty($rxSnap['exists']);
+            }
+            $rxTargetState = ['username' => (string) $username_ac, 'panel' => (string) $marzban_list_get['name_panel']];
+            if (!rx_pf_prepare($order_id, $rxToken, $rxBeforeState, $rxTargetState)) {
+                return rx_pf_abort($order_id, $rxToken, 'fulfillment_prepare_failed', true);
+            }
+            try {
+                $__pr2 = select("Payment_report", "crypto_check_count", "id_order", $order_id, "select");
+                $__cnt = is_array($__pr2) ? (int)($__pr2['crypto_check_count'] ?? 0) : 0;
+                if ($__cnt >= 1) $__isRetryCall = true;
+            } catch (Throwable $__e) { /* ignore */ }
+        }
+
         if ($__isRetryCall) {
             // در حالت retry، اول چک کن یوزر در پنل وجود داره یا نه (با همون username فاکتور)
             try {
@@ -2849,47 +3298,31 @@ function DirectPayment($order_id, $image = 'images.jpg')
         }
 
         if (empty($dataoutput) || empty($dataoutput['username'])) {
-            $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_ac, $datac);
-        }
-
-        // [duplicate retry — حداکثر 1 بار] اگه createUser duplicate برگردوند، فقط یک بار با random جدید retry می‌کنیم.
-        try {
-            if (empty($dataoutput['username'])) {
-                $__msgRaw = is_array($dataoutput) ? ($dataoutput['msg'] ?? '') : '';
-                $__msgStr = is_string($__msgRaw) ? $__msgRaw : json_encode($__msgRaw);
-                if (stripos($__msgStr, 'duplicate') !== false || stripos($__msgStr, 'already exist') !== false || stripos($__msgStr, 'exists') !== false) {
-                    $username_ac = preg_replace('/[^A-Za-z0-9-]/', '', str_replace('_', '-', (string)$Balance_id['id'])) . '-' . bin2hex(random_bytes(4));
-                    if (strlen($username_ac) < 3) $username_ac = 'u' . bin2hex(random_bytes(4));
-                    if (!empty($get_invoice['id_invoice'])) {
-                        try { update("invoice", "username", $username_ac, "id_invoice", $get_invoice['id_invoice']); } catch (Throwable $__e2) { /* fail-open */ }
-                        try { update("Payment_report", "id_invoice", "getconfigafterpay|" . $username_ac, "id_order", $order_id); } catch (Throwable $__e2) {}
-                    }
-                    $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_ac, $datac);
-                }
+            try {
+                $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_ac, $datac, $rxAllowRename);
+            } catch (Throwable $rxPanelError) {
+                return rx_pf_reconcile_later($order_id, $rxToken, 'buy_panel_exception: ' . $rxPanelError->getMessage());
             }
-        } catch (Throwable $__e) { /* fail-open */ }
-
-        // [CRITICAL: mark invoice active EARLY]
-        // اگه createUser موفق بوده، همین الان قبل از هر sendmessage/QR code generation/الخ که ممکنه hang کنه،
-        // invoice رو active علامت بزن. این جلوی retry بعدی توسط cron رو می‌گیره حتی اگه پیام تلگرام hang کنه.
-        if (!empty($dataoutput['username']) && !empty($get_invoice['id_invoice'])) {
-            try {
-                $__early = $pdo->prepare("UPDATE invoice SET Status = 'active' WHERE id_invoice = :i");
-                $__early->execute([':i' => $get_invoice['id_invoice']]);
-            } catch (Throwable $__e) { /* fail-open */ }
-            update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
-            // و dec_not_confirmed را با علامت موفقیت بگذار تا retry cron این رو پیدا نکنه
-            try {
-                $__doneNote = '[service-created at ' . date('Y-m-d H:i:s') . ' username=' . $dataoutput['username'] . ']';
-                $__mk = $pdo->prepare("UPDATE Payment_report SET dec_not_confirmed = CASE WHEN dec_not_confirmed IS NULL OR dec_not_confirmed = '' THEN :n1 ELSE CONCAT(dec_not_confirmed, ' | ', :n2) END WHERE id_order = :o");
-                $__mk->execute([':n1' => $__doneNote, ':n2' => $__doneNote, ':o' => $order_id]);
-            } catch (Throwable $__e) { /* fail-open */ }
+            if (!empty($dataoutput['renamed_from'])) {
+                $username_ac = rx_adopt_created_username($dataoutput, $username_ac, $get_invoice['id_invoice'] ?? null);
+                try { update("Payment_report", "id_invoice", "getconfigafterpay|" . $username_ac, "id_order", $order_id); } catch (Throwable $__e2) {}
+                rx_notify_username_renamed($Balance_id['id'], $dataoutput, $marzban_list_get);
+            }
+        }
+        if (empty($dataoutput['username']) && $rxReconcilable && is_array($rxBeforeState) && ($rxBeforeState['exists'] ?? null) === false) {
+            $rxSnap = rx_pf_panel_snapshot($ManagePanel, (string) $marzban_list_get['name_panel'], (string) $username_ac);
+            if (empty($rxSnap['ok'])) {
+                return rx_pf_reconcile_later($order_id, $rxToken, 'buy_result_unknown: ' . (string) ($rxSnap['error'] ?? ''));
+            }
+            if (!empty($rxSnap['exists'])) {
+                $dataoutput = rx_pf_adopt_created($rxSnap['raw']);
+            }
         }
         if ($dataoutput['username'] == null) {
-            $dataoutput['msg'] = json_encode($dataoutput['msg']);
+            $dataoutput['msg'] = rx_panel_error_text($dataoutput['msg'] ?? null, $dataoutput['detail'] ?? null);
             $__refundCu = rx_refund_payment_once($order_id, $Balance_id['id'], $Payment_report['price'], 'بازگشت وجه - خطا در ساخت سرویس', (string)$get_invoice['id_invoice']);
             if ($__refundCu === 'duplicate') {
-                return;
+                return rx_pf_fail($order_id, $rxToken, 'create_failed', $__refundCu);
             }
             // پیام UI fallback اگه textbotlang در دسترس نباشه (مثلاً وقتی از cron صدا زده میشه)
             $__uiErr = isset($textbotlang['users']['sell']['ErrorConfig']) && is_string($textbotlang['users']['sell']['ErrorConfig']) && trim($textbotlang['users']['sell']['ErrorConfig']) !== ''
@@ -2915,7 +3348,30 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     'parse_mode' => "HTML"
                 ]);
             }
-            return;
+            return rx_pf_fail($order_id, $rxToken, 'create_failed', $__refundCu);
+        }
+        $__walletPortion = (float)$get_invoice['price_product'] - (float)($Payment_report['price'] ?? 0);
+        if ($__walletPortion < 0) {
+            $__walletPortion = 0;
+        }
+        $Balance_prims = (float)$Balance_id['Balance'] - $__walletPortion;
+        if ($Balance_prims <= 0) {
+            $Balance_prims = 0;
+        }
+        // [CRITICAL: mark invoice active EARLY]
+        // اگه createUser موفق بوده، همین الان قبل از هر sendmessage/QR code generation/الخ که ممکنه hang کنه،
+        // invoice رو active علامت بزن. این جلوی retry بعدی توسط cron رو می‌گیره حتی اگه پیام تلگرام hang کنه.
+        $__doneNote = '[service-created at ' . date('Y-m-d H:i:s') . ' username=' . $dataoutput['username'] . ']';
+        $rxStatements = [
+            ["UPDATE user SET Balance = GREATEST(Balance - ?, 0) WHERE id = ?", [$__walletPortion, $Balance_id['id']]],
+            ["UPDATE Payment_report SET dec_not_confirmed = CASE WHEN dec_not_confirmed IS NULL OR dec_not_confirmed = '' THEN ? ELSE CONCAT(dec_not_confirmed, ' | ', ?) END WHERE id_order = ?", [$__doneNote, $__doneNote, $order_id]],
+        ];
+        if (!empty($get_invoice['id_invoice'])) {
+            $rxStatements[] = ["UPDATE invoice SET Status = 'active' WHERE id_invoice = ?", [$get_invoice['id_invoice']]];
+        }
+        $rxCompletion = rx_pf_complete($order_id, $rxToken, ['username' => (string) $dataoutput['username'], 'renamed_from' => $dataoutput['renamed_from'] ?? null], $rxStatements);
+        if ($rxCompletion !== 'completed') {
+            return rx_pf_completion_outcome($order_id, $rxToken, $rxCompletion);
         }
         $Shoppinginfo = json_encode([
             'inline_keyboard' => [
@@ -2999,16 +3455,6 @@ function DirectPayment($order_id, $image = 'images.jpg')
                 update("setting", "numbercount", $value);
             }
         }
-        $__walletPortion = (float)$get_invoice['price_product'] - (float)($Payment_report['price'] ?? 0);
-        if ($__walletPortion < 0) {
-            $__walletPortion = 0;
-        }
-        $Balance_prims = (float)$Balance_id['Balance'] - $__walletPortion;
-        if ($Balance_prims <= 0) {
-            $Balance_prims = 0;
-        }
-        $__stmtWalletDeduct = $pdo->prepare("UPDATE user SET Balance = GREATEST(Balance - :d, 0) WHERE id = :u");
-        $__stmtWalletDeduct->execute([':d' => $__walletPortion, ':u' => $Balance_id['id']]);
         $balanceformatsell = select("user", "Balance", "id", $get_invoice['id_user'], "select")['Balance'];
         $balanceformatsell = number_format($balanceformatsell, 0);
         $balancebefore = number_format($Balance_id['Balance'], 0);
@@ -3104,7 +3550,7 @@ $textonebuy
         $service_other = $data_order;
         if ($service_other == false) {
             sendmessage($Balance_id['id'], '❌ خطایی در هنگام تمدید رخ داده با پشتیبانی در ارتباط باشید', $keyboard, 'HTML');
-            return;
+            return rx_pf_abort($order_id, $rxToken, 'renewal_service_other_not_found', true);
         }
         $service_other = json_decode($service_other['value'], true);
         $codeproduct = $service_other['code_product'];
@@ -3128,14 +3574,25 @@ $textonebuy
             } elseif ($__refundPr === 'failed') {
                 sendmessage($Balance_id['id'], "❌ محصول این تمدید دیگر در دسترس نیست و بازگشت وجه با خطا مواجه شد؛ لطفاً با پشتیبانی در ارتباط باشید.", $keyboard, 'HTML');
             }
-            return;
+            return rx_pf_fail($order_id, $rxToken, 'renewal_product_unavailable', $__refundPr);
+        }
+        $fxOrderValue = json_decode((string) ($data_order['value'] ?? ''), true);
+        if (is_array($fxOrderValue) && isset($fxOrderValue['pricing_snapshot']) && is_numeric($data_order['price'] ?? null)) {
+            $prodcut['price_product'] = $data_order['price'];
         }
         if ($nameloc['name_product'] == "سرویس تست") {
             update("invoice", "name_product", $prodcut['name_product'], "id_invoice", $nameloc['id_invoice']);
             update("invoice", "price_product", $prodcut['price_product'], "id_invoice", $nameloc['id_invoice']);
         }
         $dateacc = date('Y/m/d H:i:s');
+        $rxStatements = [];
         if (function_exists('nmPanelNationalEnabled') && nmPanelNationalEnabled($marzban_list_get)) {
+            if ($rxPhase === 'reconcile') {
+                return rx_pf_manual_review($order_id, $rxToken, 'national_stock_renewal_unverifiable', ['username' => (string) $nameloc['username']]);
+            }
+            if (!rx_pf_prepare($order_id, $rxToken, null, ['national_stock' => true])) {
+                return rx_pf_abort($order_id, $rxToken, 'fulfillment_prepare_failed', true);
+            }
             $stockNew = function_exists('nmStockReserveForProduct') ? nmStockReserveForProduct($marzban_list_get, $prodcut, $Balance_id['id'], $nameloc['id_invoice'], 'paid_extend_national_stock') : false;
             if (!is_array($stockNew) || (string)($stockNew['content'] ?? '') === '') {
                 if (is_array($stockNew) && function_exists('nmStockReleaseReservation')) nmStockReleaseReservation($stockNew);
@@ -3145,7 +3602,7 @@ $textonebuy
                 } elseif ($__refundSt === 'failed') {
                     sendmessage($Balance_id['id'], "❌ موجودی انبار برای این محصول تمام شده است و بازگشت وجه با خطا مواجه شد؛ لطفاً با پشتیبانی در ارتباط باشید.", $keyboard, 'HTML');
                 }
-                return;
+                return rx_pf_fail($order_id, $rxToken, 'national_stock_empty', $__refundSt);
             }
             update("user", "Balance", 0, "id", $Balance_id['id']);
             update("invoice", "name_product", $prodcut['name_product'], "id_invoice", $nameloc['id_invoice']);
@@ -3165,15 +3622,94 @@ $textonebuy
                 if (function_exists('rx_log_event')) {
                     rx_log_event('DIRECT_PAYMENT_NO_MANAGE_PANEL', 'ManagePanel unavailable; extend aborted without side effects', ['id_order' => $order_id]);
                 }
-                return;
+                return rx_pf_abort($order_id, $rxToken, 'manage_panel_unavailable', true);
             }
             $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
             $Balance_Low_user = 0;
-            $extend = $ManagePanel->extend($marzban_list_get['Methodextend'], $prodcut['Volume_constraint'], $prodcut['Service_time'], $nameloc['username'], $prodcut['code_product'], $marzban_list_get['code_panel']);
+            $rxRenewMode = rxRenewalMode($marzban_list_get['Methodextend'] ?? '');
+            $rxReconcilable = rx_pf_panel_reconcilable($marzban_list_get) && is_array($rxRenewMode) && empty($rxRenewMode['queued']);
+            $rxSnap = rx_pf_snapshot_from_datauser($DataUserOut);
+            $rxApply = true;
+            $rxAfterState = null;
+            if ($rxPhase === 'reconcile') {
+                if (!$rxReconcilable || !is_array($rxBeforeState) || !is_array($rxTargetState)) {
+                    return rx_pf_manual_review($order_id, $rxToken, 'renewal_result_unverifiable', ['username' => (string) $nameloc['username']]);
+                }
+                $rxClass = rx_pf_classify($rxSnap, $rxBeforeState, $rxTargetState);
+                if ($rxClass === 'unknown') {
+                    return rx_pf_defer($order_id, $rxToken, 'renewal_panel_read_failed: ' . (string) ($rxSnap['error'] ?? ''));
+                }
+                if ($rxClass === 'ambiguous') {
+                    return rx_pf_manual_review($order_id, $rxToken, 'renewal_panel_state_ambiguous', ['username' => (string) $nameloc['username']]);
+                }
+                if ($rxClass === 'target') {
+                    $rxApply = false;
+                    $extend = ['status' => true, 'reconciled' => true];
+                    $rxAfterState = rx_pf_limits($rxSnap);
+                } elseif (!rx_pf_mark_applying($order_id, $rxToken)) {
+                    return rx_pf_result('already_processing', 'ownership_lost');
+                }
+            } else {
+                $rxBeforeState = null;
+                $rxTargetState = null;
+                if ($rxRenewMode === null) {
+                    return rx_pf_manual_review($order_id, $rxToken, 'unknown_renewal_method: ' . (string) ($marzban_list_get['Methodextend'] ?? ''), ['username' => (string) $nameloc['username']]);
+                }
+                if ($rxReconcilable) {
+                    if (empty($rxSnap['ok'])) {
+                        return rx_pf_abort($order_id, $rxToken, 'renewal_panel_read_failed', true);
+                    }
+                    if (!empty($rxSnap['exists'])) {
+                        $rxBeforeState = rx_pf_limits($rxSnap);
+                        $rxBeforeState['status'] = (string) ($rxSnap['raw']['status'] ?? '');
+                        $rxPlan = rxBuildRenewalTarget(time(), (string) $marzban_list_get['Methodextend'], $rxBeforeState, $prodcut['Volume_constraint'], $prodcut['Service_time']);
+                        if (empty($rxPlan['ok'])) {
+                            return rx_pf_manual_review($order_id, $rxToken, 'renewal_plan_refused: ' . (string) ($rxPlan['reason'] ?? ''), ['username' => (string) $nameloc['username']]);
+                        }
+                        $rxBeforeState = array_merge($rxBeforeState, [
+                            'username' => (string) $nameloc['username'],
+                            'panel' => (string) $marzban_list_get['name_panel'],
+                            'remaining' => $rxPlan['before_remaining'],
+                            'method' => $rxPlan['method'],
+                        ]);
+                        $rxTargetState = $rxPlan;
+                    }
+                }
+                if (!rx_pf_prepare($order_id, $rxToken, $rxBeforeState, $rxTargetState)) {
+                    return rx_pf_abort($order_id, $rxToken, 'fulfillment_prepare_failed', true);
+                }
+            }
+            if ($rxApply) {
+                try {
+                    $extend = $ManagePanel->extend($marzban_list_get['Methodextend'], $prodcut['Volume_constraint'], $prodcut['Service_time'], $nameloc['username'], $prodcut['code_product'], $marzban_list_get['code_panel'], $rxTargetState);
+                } catch (Throwable $rxPanelError) {
+                    return rx_pf_reconcile_later($order_id, $rxToken, 'renewal_panel_exception: ' . $rxPanelError->getMessage());
+                }
+            }
+            if (($extend['status'] ?? false) == false && is_array($rxBeforeState) && is_array($rxTargetState)) {
+                $rxPostSnap = rx_pf_panel_snapshot($ManagePanel, (string) $nameloc['Service_location'], (string) $nameloc['username']);
+                $rxClass = rx_pf_classify($rxPostSnap, $rxBeforeState, $rxTargetState);
+                if ($rxClass === 'target') {
+                    $extend = ['status' => true, 'reconciled' => true];
+                    $rxAfterState = rx_pf_limits($rxPostSnap);
+                } elseif ($rxClass !== 'before') {
+                    return rx_pf_reconcile_later($order_id, $rxToken, 'renewal_result_unknown: ' . (is_scalar($extend['msg'] ?? null) ? (string) $extend['msg'] : ''));
+                }
+            }
+            if (!empty($extend['status']) && is_array($rxTargetState) && $rxAfterState === null) {
+                $rxVerify = is_array($extend['rx_renewal'] ?? null) ? $extend['rx_renewal'] : null;
+                if ($rxVerify === null || !is_array($rxVerify['after'] ?? null)) {
+                    return rx_pf_reconcile_later($order_id, $rxToken, 'renewal_result_unverified');
+                }
+                if (empty($rxVerify['verified'])) {
+                    return rx_pf_manual_review($order_id, $rxToken, 'renewal_result_mismatch', ['username' => (string) $nameloc['username']]);
+                }
+                $rxAfterState = $rxVerify['after'];
+            }
         if ($extend['status'] == false) {
             $__refundEx = rx_refund_payment_once($Payment_report['id_order'], $Balance_id['id'], $Payment_report['price'], 'بازگشت وجه - خطا در تمدید سرویس', (string)($nameloc['id_invoice'] ?? ''));
             if ($__refundEx === 'duplicate') {
-                return;
+                return rx_pf_fail($order_id, $rxToken, 'renewal_failed', $__refundEx);
             }
             if ($__refundEx === 'refunded') {
                 sendmessage($Balance_id['id'], $textbotlang['users']['sell']['ErrorConfig'], $keyboard, 'HTML');
@@ -3181,7 +3717,7 @@ $textonebuy
             } else {
                 sendmessage($Balance_id['id'], "❌ تمدید سرویس با خطا مواجه شد و بازگشت وجه نیز انجام نشد؛ لطفاً با پشتیبانی در ارتباط باشید.", $keyboard, 'HTML');
             }
-            $extend['msg'] = json_encode($extend['msg']);
+            $extend['msg'] = rx_panel_error_text($extend['msg'] ?? null, $extend['detail'] ?? null);
             $textreports = "
         خطای تمدید سرویس
 <blockquote>نام پنل : {$marzban_list_get['name_panel']}</blockquote>
@@ -3202,11 +3738,14 @@ $textonebuy
                     'parse_mode' => "HTML"
                 ]);
             }
-            return;
+            return rx_pf_fail($order_id, $rxToken, 'renewal_failed', $__refundEx);
         }
-            update("user", "Balance", $Balance_Low_user, "id", $Balance_id['id']);
+            $rxStatements[] = ["UPDATE user SET Balance = ? WHERE id = ?", [$Balance_Low_user, $Balance_id['id']]];
         }
-        update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
+        $rxCompletion = rx_pf_complete($order_id, $rxToken, ['operation' => 'getextenduser', 'panel' => $extend, 'target' => $rxTargetState ?? null], $rxStatements);
+        if ($rxCompletion !== 'completed') {
+            return rx_pf_completion_outcome($order_id, $rxToken, $rxCompletion);
+        }
 
         MiniDiscount::logSale([
             'id_user' => $Balance_id['id'],
@@ -3278,6 +3817,11 @@ $textonebuy
 ▫️نام محصول : {$prodcut['name_product']}
 ▫️مبلغ تمدید $priceproductformat تومان
 ";
+            if (is_array($rxBeforeState ?? null) && is_array($rxAfterState ?? null)) {
+                $textextend .= "\n" . rxRenewalResultText($rxBeforeState, $rxAfterState);
+            } elseif (($rxOutcomeText = rxRenewalOutcomeText($extend)) !== '') {
+                $textextend .= "\n" . $rxOutcomeText;
+            }
         }
         sendmessage($Balance_id['id'], $textextend, $keyboardextendfnished, 'HTML');
         if (intval($setting['scorestatus']) == 1 and !in_array($Balance_id['id'], $admin_ids)) {
@@ -3349,9 +3893,49 @@ $textonebuy
             if (function_exists('rx_log_event')) {
                 rx_log_event('DIRECT_PAYMENT_NO_MANAGE_PANEL', 'ManagePanel unavailable; extra volume aborted without side effects', ['id_order' => $order_id]);
             }
-            return;
+            return rx_pf_abort($order_id, $rxToken, 'manage_panel_unavailable', true);
         }
         $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $steppay[0]);
+        $rxReconcilable = rx_pf_panel_reconcilable($marzban_list_get);
+        $rxSnap = rx_pf_snapshot_from_datauser($DataUserOut);
+        $rxApply = true;
+        if ($rxPhase === 'reconcile') {
+            if (!$rxReconcilable || !is_array($rxBeforeState) || !is_array($rxTargetState)) {
+                return rx_pf_manual_review($order_id, $rxToken, 'extra_volume_result_unverifiable', ['username' => (string) $nameloc['username']]);
+            }
+            $rxClass = rx_pf_classify($rxSnap, $rxBeforeState, $rxTargetState);
+            if ($rxClass === 'unknown') {
+                return rx_pf_defer($order_id, $rxToken, 'extra_volume_panel_read_failed: ' . (string) ($rxSnap['error'] ?? ''));
+            }
+            if ($rxClass === 'ambiguous') {
+                return rx_pf_manual_review($order_id, $rxToken, 'extra_volume_panel_state_ambiguous', ['username' => (string) $nameloc['username']]);
+            }
+            if ($rxClass === 'target') {
+                $rxApply = false;
+                $extra_volume = ['status' => true, 'reconciled' => true];
+            } elseif (!rx_pf_mark_applying($order_id, $rxToken)) {
+                return rx_pf_result('already_processing', 'ownership_lost');
+            }
+        } else {
+            $rxBeforeState = null;
+            $rxTargetState = null;
+            if ($rxReconcilable) {
+                if (empty($rxSnap['ok'])) {
+                    return rx_pf_abort($order_id, $rxToken, 'extra_volume_panel_read_failed', true);
+                }
+                if (!empty($rxSnap['exists'])) {
+                    $rxBeforeState = rx_pf_limits($rxSnap);
+                    $rxTargetState = rx_pf_extra_volume_target($rxBeforeState, $volume);
+                }
+            }
+            if (!rx_pf_prepare($order_id, $rxToken, $rxBeforeState, $rxTargetState)) {
+                return rx_pf_abort($order_id, $rxToken, 'fulfillment_prepare_failed', true);
+            }
+        }
+        if (is_array($rxBeforeState) && is_array($DataUserOut)) {
+            $DataUserOut['data_limit'] = $rxBeforeState['data_limit'] ?? ($DataUserOut['data_limit'] ?? null);
+            $DataUserOut['expire'] = $rxBeforeState['expire'] ?? ($DataUserOut['expire'] ?? null);
+        }
         $data_for_database = json_encode(array(
             'volume_value' => $volume,
             'old_volume' => $DataUserOut['data_limit'],
@@ -3359,13 +3943,27 @@ $textonebuy
         ));
         $dateacc = date('Y/m/d H:i:s');
         $type = "extra_user";
-        $extra_volume = $ManagePanel->extra_volume($nameloc['username'], $marzban_list_get['code_panel'], $volume);
+        if ($rxApply) {
+            try {
+                $extra_volume = $ManagePanel->extra_volume($nameloc['username'], $marzban_list_get['code_panel'], $volume, $rxTargetState);
+            } catch (Throwable $rxPanelError) {
+                return rx_pf_reconcile_later($order_id, $rxToken, 'extra_volume_panel_exception: ' . $rxPanelError->getMessage());
+            }
+        }
+        if (($extra_volume['status'] ?? false) == false && is_array($rxBeforeState) && is_array($rxTargetState)) {
+            $rxClass = rx_pf_classify(rx_pf_panel_snapshot($ManagePanel, (string) $nameloc['Service_location'], (string) $steppay[0]), $rxBeforeState, $rxTargetState);
+            if ($rxClass === 'target') {
+                $extra_volume = ['status' => true, 'reconciled' => true];
+            } elseif ($rxClass !== 'before') {
+                return rx_pf_reconcile_later($order_id, $rxToken, 'extra_volume_result_unknown: ' . (is_scalar($extra_volume['msg'] ?? null) ? (string) $extra_volume['msg'] : ''));
+            }
+        }
         if ($extra_volume['status'] == false) {
             $__refundVx = rx_refund_payment_once($Payment_report['id_order'], $Balance_id['id'], $Payment_report['price'], 'بازگشت وجه - خطا در خرید حجم اضافه', (string)($nameloc['id_invoice'] ?? ''));
             if ($__refundVx === 'duplicate') {
-                return;
+                return rx_pf_fail($order_id, $rxToken, 'extra_volume_failed', $__refundVx);
             }
-            $extra_volume['msg'] = json_encode($extra_volume['msg']);
+            $extra_volume['msg'] = rx_panel_error_text($extra_volume['msg'] ?? null, $extra_volume['detail'] ?? null);
             $textreports = "خطای خرید حجم اضافه
 <blockquote>نام پنل : {$marzban_list_get['name_panel']}</blockquote>
 <blockquote>نام کاربری سرویس : {$nameloc['username']}</blockquote>
@@ -3382,10 +3980,12 @@ $textonebuy
                     'parse_mode' => "HTML"
                 ]);
             }
-            return;
+            return rx_pf_fail($order_id, $rxToken, 'extra_volume_failed', $__refundVx);
         }
-        update("user", "Balance", $Balance_Low_user, "id", $Balance_id['id']);
-        update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
+        $rxCompletion = rx_pf_complete($order_id, $rxToken, ['operation' => 'getextravolumeuser', 'panel' => $extra_volume, 'target' => $rxTargetState], [["UPDATE user SET Balance = ? WHERE id = ?", [$Balance_Low_user, $Balance_id['id']]]]);
+        if ($rxCompletion !== 'completed') {
+            return rx_pf_completion_outcome($order_id, $rxToken, $rxCompletion);
+        }
         MiniDiscount::logSale([
             'id_user' => $Balance_id['id'],
             'id_invoice' => $nameloc['id_invoice'] ?? null,
@@ -3477,9 +4077,49 @@ $textonebuy
             if (function_exists('rx_log_event')) {
                 rx_log_event('DIRECT_PAYMENT_NO_MANAGE_PANEL', 'ManagePanel unavailable; extra time aborted without side effects', ['id_order' => $order_id]);
             }
-            return;
+            return rx_pf_abort($order_id, $rxToken, 'manage_panel_unavailable', true);
         }
         $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $steppay[0]);
+        $rxReconcilable = rx_pf_panel_reconcilable($marzban_list_get);
+        $rxSnap = rx_pf_snapshot_from_datauser($DataUserOut);
+        $rxApply = true;
+        if ($rxPhase === 'reconcile') {
+            if (!$rxReconcilable || !is_array($rxBeforeState) || !is_array($rxTargetState)) {
+                return rx_pf_manual_review($order_id, $rxToken, 'extra_time_result_unverifiable', ['username' => (string) $nameloc['username']]);
+            }
+            $rxClass = rx_pf_classify($rxSnap, $rxBeforeState, $rxTargetState);
+            if ($rxClass === 'unknown') {
+                return rx_pf_defer($order_id, $rxToken, 'extra_time_panel_read_failed: ' . (string) ($rxSnap['error'] ?? ''));
+            }
+            if ($rxClass === 'ambiguous') {
+                return rx_pf_manual_review($order_id, $rxToken, 'extra_time_panel_state_ambiguous', ['username' => (string) $nameloc['username']]);
+            }
+            if ($rxClass === 'target') {
+                $rxApply = false;
+                $extra_time = ['status' => true, 'reconciled' => true];
+            } elseif (!rx_pf_mark_applying($order_id, $rxToken)) {
+                return rx_pf_result('already_processing', 'ownership_lost');
+            }
+        } else {
+            $rxBeforeState = null;
+            $rxTargetState = null;
+            if ($rxReconcilable) {
+                if (empty($rxSnap['ok'])) {
+                    return rx_pf_abort($order_id, $rxToken, 'extra_time_panel_read_failed', true);
+                }
+                if (!empty($rxSnap['exists'])) {
+                    $rxBeforeState = rx_pf_limits($rxSnap);
+                    $rxTargetState = rx_pf_extra_time_target($rxBeforeState, $tmieextra, time());
+                }
+            }
+            if (!rx_pf_prepare($order_id, $rxToken, $rxBeforeState, $rxTargetState)) {
+                return rx_pf_abort($order_id, $rxToken, 'fulfillment_prepare_failed', true);
+            }
+        }
+        if (is_array($rxBeforeState) && is_array($DataUserOut)) {
+            $DataUserOut['data_limit'] = $rxBeforeState['data_limit'] ?? ($DataUserOut['data_limit'] ?? null);
+            $DataUserOut['expire'] = $rxBeforeState['expire'] ?? ($DataUserOut['expire'] ?? null);
+        }
         $data_for_database = json_encode(array(
             'day' => $tmieextra,
             'old_volume' => $DataUserOut['data_limit'],
@@ -3489,16 +4129,30 @@ $textonebuy
         $type = "extra_time_user";
         $timeservice = $DataUserOut['expire'] - time();
         $day = floor($timeservice / 86400);
-        $extra_time = $ManagePanel->extra_time($nameloc['username'], $marzban_list_get['code_panel'], $tmieextra);
+        if ($rxApply) {
+            try {
+                $extra_time = $ManagePanel->extra_time($nameloc['username'], $marzban_list_get['code_panel'], $tmieextra, $rxTargetState);
+            } catch (Throwable $rxPanelError) {
+                return rx_pf_reconcile_later($order_id, $rxToken, 'extra_time_panel_exception: ' . $rxPanelError->getMessage());
+            }
+        }
+        if (($extra_time['status'] ?? false) == false && is_array($rxBeforeState) && is_array($rxTargetState)) {
+            $rxClass = rx_pf_classify(rx_pf_panel_snapshot($ManagePanel, (string) $nameloc['Service_location'], (string) $steppay[0]), $rxBeforeState, $rxTargetState);
+            if ($rxClass === 'target') {
+                $extra_time = ['status' => true, 'reconciled' => true];
+            } elseif ($rxClass !== 'before') {
+                return rx_pf_reconcile_later($order_id, $rxToken, 'extra_time_result_unknown: ' . (is_scalar($extra_time['msg'] ?? null) ? (string) $extra_time['msg'] : ''));
+            }
+        }
         if ($extra_time['status'] == false) {
             $__refundEt = rx_refund_payment_once($Payment_report['id_order'], $Payment_report['id_user'], $Payment_report['price'], 'بازگشت وجه - خطا در خرید زمان اضافه', (string)($nameloc['id_invoice'] ?? ''));
             if ($__refundEt === 'duplicate') {
-                return;
+                return rx_pf_fail($order_id, $rxToken, 'extra_time_failed', $__refundEt);
             }
             if ($__refundEt === 'refunded') {
                 sendmessage($Payment_report['id_user'], "💎  کاربر عزیز بدلیل انجام نشدن خرید زمان اضافه مبلغ " . rxFormatToman($Payment_report['price']) . " تومان به کیف پول شما اضافه گردید.", null, 'HTML');
             }
-            $extra_time['msg'] = json_encode($extra_time['msg']);
+            $extra_time['msg'] = rx_panel_error_text($extra_time['msg'] ?? null, $extra_time['detail'] ?? null);
             $textreports = "خطای خرید حجم اضافه
 <blockquote>نام پنل : {$marzban_list_get['name_panel']}</blockquote>
 <blockquote>نام کاربری سرویس : {$nameloc['username']}</blockquote>
@@ -3512,10 +4166,12 @@ $textonebuy
                     'parse_mode' => "HTML"
                 ]);
             }
-            return;
+            return rx_pf_fail($order_id, $rxToken, 'extra_time_failed', $__refundEt);
         }
-        update("user", "Balance", $Balance_Low_user, "id", $nameloc['id_user']);
-        update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
+        $rxCompletion = rx_pf_complete($order_id, $rxToken, ['operation' => 'getextratimeuser', 'panel' => $extra_time, 'target' => $rxTargetState], [["UPDATE user SET Balance = ? WHERE id = ?", [$Balance_Low_user, $nameloc['id_user']]]]);
+        if ($rxCompletion !== 'completed') {
+            return rx_pf_completion_outcome($order_id, $rxToken, $rxCompletion);
+        }
         MiniDiscount::logSale([
             'id_user' => $Balance_id['id'],
             'id_invoice' => $nameloc['id_invoice'] ?? null,
@@ -3596,28 +4252,31 @@ $textonebuy
         $__paidAmount = intval($Payment_report['price']);
         $__creditAmount = $__paidAmount + $__chargeBonus;
         $Balance_confrim = intval($Balance_id['Balance']) + $__creditAmount;
-        $rxClaimCharge = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'paid', direct_payment_done = 1 WHERE id_order = :o AND direct_payment_done IS NULL");
-        $rxClaimCharge->execute([':o' => $Payment_report['id_order']]);
-        if ($rxClaimCharge->rowCount() < 1) {
-            return;
+        $__pm = (string) ($Payment_report['Payment_Method'] ?? '');
+        if (stripos($__pm, 'crypto') !== false || stripos($__pm, 'arze digital') !== false || stripos($__pm, 'plisio') !== false || stripos($__pm, 'nowpayment') !== false || stripos($__pm, 'digitaltron') !== false) {
+            $__wlCategory = 'topup_crypto';
+        } elseif (stripos($__pm, 'cart to cart') !== false || stripos($__pm, 'carttocart') !== false) {
+            $__wlCategory = 'topup_card';
+        } else {
+            $__wlCategory = 'topup_gateway';
         }
-        if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
-        if (!balance_atomic_credit($Payment_report['id_user'], $__creditAmount)) {
-            try {
-                $rxReleaseCharge = $pdo->prepare("UPDATE Payment_report SET payment_Status = :s, direct_payment_done = NULL WHERE id_order = :o AND direct_payment_done = 1");
-                $rxReleaseCharge->execute([':s' => (string) ($Payment_report['payment_Status'] ?? 'Unpaid'), ':o' => $Payment_report['id_order']]);
-            } catch (Throwable $rxReleaseErr) {
-                error_log('DirectPayment charge release failed: ' . $rxReleaseErr->getMessage());
-            }
-            if (function_exists('clearSelectCache')) clearSelectCache('Payment_report');
+        $rxCredit = rx_pf_wallet_credit($order_id, $rxToken, $Payment_report['id_user'], $__creditAmount, $__wlCategory, $__pm);
+        if ($rxCredit === 'already_completed') {
+            return rx_pf_result('already_completed', 'wallet_already_credited');
+        }
+        if ($rxCredit !== 'credited') {
             if (function_exists('rx_log_event')) {
-                rx_log_event('WALLET_CREDIT_FAILED', 'DirectPayment wallet credit failed; claim released', [
+                rx_log_event('WALLET_CREDIT_FAILED', 'DirectPayment wallet credit failed; nothing was credited', [
                     'id_order' => $Payment_report['id_order'],
                     'id_user' => $Payment_report['id_user'],
                     'amount' => $__creditAmount,
+                    'outcome' => $rxCredit,
                 ]);
             }
-            return;
+            if ($rxCredit === 'not_owner' || $rxCredit === 'invalid_state') {
+                return rx_pf_result('already_processing', 'wallet_' . $rxCredit);
+            }
+            return rx_pf_abort($order_id, $rxToken, 'wallet_credit_failed', true);
         }
         update("Payment_report", "at_updated", date('Y/m/d H:i:s'), "id_order", $Payment_report['id_order']);
         update("user", "Processing_value_four", "", "id", $Payment_report['id_user']);
@@ -3638,17 +4297,6 @@ $textonebuy
                 'price_after' => $__paidAmount,
                 'section' => 'charge',
             ]);
-        }
-        if (function_exists('wallet_ledger_record')) {
-            $__pm = (string) ($Payment_report['Payment_Method'] ?? '');
-            if (stripos($__pm, 'crypto') !== false || stripos($__pm, 'arze digital') !== false || stripos($__pm, 'plisio') !== false || stripos($__pm, 'nowpayment') !== false || stripos($__pm, 'digitaltron') !== false) {
-                $__wlCategory = 'topup_crypto';
-            } elseif (stripos($__pm, 'cart to cart') !== false || stripos($__pm, 'carttocart') !== false) {
-                $__wlCategory = 'topup_card';
-            } else {
-                $__wlCategory = 'topup_gateway';
-            }
-            wallet_ledger_record($Payment_report['id_user'], 'credit', $__creditAmount, $__wlCategory, $__pm, $Payment_report['id_order']);
         }
         $format_price_cart = number_format($__paidAmount, 0);
         if ($Payment_report['Payment_Method'] == "cart to cart" or $Payment_report['Payment_Method'] == "arze digital offline") {
@@ -3675,7 +4323,5 @@ $textonebuy
             ], $setting);
         }
     }
-    if (function_exists('update')) {
-        update("Payment_report", "direct_payment_done", 1, "id_order", $order_id);
-    }
+    return rx_pf_result('completed');
 }

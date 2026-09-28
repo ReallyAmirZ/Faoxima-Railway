@@ -47,6 +47,7 @@ if (!function_exists('rx_featCategoryRows')) {
                         : (string)($textbotlang['Admin']['Status']['statusoff'] ?? '❌ خاموش'),
                    'callback_data' => 'editstsuts-cardverify-' . ($setting['card_verify_status'] ?? 'offcardverify')],
                  ['text' => "💳 احراز هویت کارت‌به‌کارت", 'callback_data' => "cardverify_info"]],
+                [['text' => "🎭 ارسال استیکر", 'callback_data' => "stmedia_menu"]],
             ];
         } elseif ($cat === 'users') {
             return [
@@ -164,6 +165,11 @@ if (function_exists('rxPremiumEmojiCancelKind')
     unset($rxPemCancelKind, $rxPemStepLeft);
 }
 unset($rx_pem_entry_step);
+
+if (function_exists('rxStartMediaHandleAdminUpdate')
+    && rxStartMediaHandleAdminUpdate($from_id, $datain ?? '', $update ?? [], $user, ($adminrulecheck['rule'] ?? '') === "administrator")) {
+    return;
+}
 
 if (in_array($text, $textadmin) || $datain == "admin") {
     if ($datain == "admin")
@@ -344,7 +350,7 @@ if (in_array($text, $textadmin) || $datain == "admin") {
         return;
     }
 
-    if (strpos($currentStep, 'get_remna_') === 0 || in_array($currentStep, ["updatetime", "val_usertest", "getlimitnew", "panellimit_getnew", "GetusernameNew", "GeturlNew", "protocolset", "updatemethodusername", "GetNameNew", "getprotocol", "getprotocolremove", "GetpaawordNew", "updateextendmethod", "setpricechangelocation"])) {
+    if (strpos($currentStep, 'get_remna_') === 0 || in_array($currentStep, ["updatetime", "val_usertest", "tset_limit", "getlimitnew", "panellimit_getnew", "GetusernameNew", "GeturlNew", "protocolset", "updatemethodusername", "GetNameNew", "getprotocol", "getprotocolremove", "GetpaawordNew", "updateextendmethod", "setpricechangelocation"])) {
         $panelNameBack = function_exists('nmResolvePanelNameForUser') ? nmResolvePanelNameForUser($user) : (string)$user['Processing_value'];
         if ($panelNameBack !== '') {
             update("user", "Processing_value", $panelNameBack, "id", $from_id);
@@ -1045,14 +1051,26 @@ if (in_array($text, $textadmin) || $datain == "admin") {
     step('get_number_limit', $from_id);
 } elseif ($user['step'] == "get_number_limit") {
     if (!isset($update['message']) && empty($text)) { return; }
+    $text = function_exists('rx_test_normalize_digits') ? rx_test_normalize_digits($text) : trim((string) $text);
+    if (!ctype_digit((string) $text) || strlen((string) $text) > 7) {
+        nm_adminInstantReply($from_id, '❌ مقدار نامعتبر است. یک عدد صحیح ارسال کنید.', $backadmin, 'HTML');
+        return;
+    }
     nm_adminInstantReply($from_id, $textbotlang['Admin']['getlimitusertest']['setlimit'], $keyboardadmin, 'HTML');
     $id_user_set = $text;
     step('home', $from_id);
     update("user", "limit_usertest", $text, "id", $user['Processing_value']);
+    if (function_exists('rx_test_override_set')) {
+        rx_test_override_set($user['Processing_value'], $text, $from_id);
+    }
 } elseif ($text == $textbotlang['Admin']['getlimitusertest']['setlimitbtn'] && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, $textbotlang['Admin']['getlimitusertest']['limitall'], $backadmin, 'HTML');
     step('limit_usertest_allusers', $from_id);
 } elseif ($user['step'] == "limit_usertest_allusers") {
+    if (!isset($update['message']) || !ctype_digit((string) $text) || strlen((string) $text) > 7) {
+        nm_adminInstantReply($from_id, '❌ مقدار نامعتبر است. یک عدد صحیح ارسال کنید.', $backadmin, 'HTML');
+        return;
+    }
     nm_adminInstantReply($from_id, $textbotlang['Admin']['getlimitusertest']['setlimitall'], $keyboardadmin, 'HTML');
     step('home', $from_id);
     update("user", "limit_usertest", $text);
@@ -2204,7 +2222,7 @@ $paycount
     $subvip = "offsubvip";
     $stauts_on_holed = "1";
     $shopFeaturesDefault = panel_features_all_off_json();
-    $stmt = $pdo->prepare("INSERT INTO marzban_panel (code_panel,name_panel,sublink,config,MethodUsername,TestAccount,status,limit_panel,namecustom,Methodextend,type,conecton,inboundid,agent,inbound_deactive,inboundstatus,url_panel,username_panel,password_panel,api_key,time_usertest,val_usertest,linksubx,priceextravolume,priceextratime,pricecustomvolume,pricecustomtime,mainvolume,maxvolume,maintime,maxtime,status_extend,subvip,changeloc,customvolume,on_hold_test,version_panel,guard_service_ids,guard_note,guard_auto_delete_days,guard_auto_renewals,guard_version,shop_features,rebecca_service_id) VALUES (:code_panel,:name_panel,:sublink,:config,:MethodUsername,:TestAccount,:status,:limit_panel,:namecustom,:Methodextend,:type,:conecton,:inboundid,:agent,:inbound_deactive,:inboundstatus,:url_panel,:username_panel,:password_panel,:api_key,:val_usertest,:time_usertest,:linksubx,:priceextravolume,:priceextratime,:pricecustomvolume,:pricecustomtime,:mainvolume,:maxvolume,:maintime,:maxtime,:status_extend,:subvip,:changeloc,:customvolume,:on_hold_test,:version_panel,:guard_service_ids,:guard_note,:guard_auto_delete_days,:guard_auto_renewals,:guard_version,:shop_features,:rebecca_service_id)");
+    $stmt = $pdo->prepare("INSERT INTO marzban_panel (code_panel,name_panel,sublink,config,MethodUsername,TestAccount,status,limit_panel,namecustom,Methodextend,type,conecton,inboundid,agent,inbound_deactive,inboundstatus,url_panel,username_panel,password_panel,api_key,time_usertest,val_usertest,linksubx,priceextravolume,priceextratime,pricecustomvolume,pricecustomtime,mainvolume,maxvolume,maintime,maxtime,status_extend,subvip,changeloc,customvolume,on_hold_test,version_panel,guard_service_ids,guard_note,guard_auto_delete_days,guard_auto_renewals,guard_version,shop_features,rebecca_service_id) VALUES (:code_panel,:name_panel,:sublink,:config,:MethodUsername,:TestAccount,:status,:limit_panel,:namecustom,:Methodextend,:type,:conecton,:inboundid,:agent,:inbound_deactive,:inboundstatus,:url_panel,:username_panel,:password_panel,:api_key,:time_usertest,:val_usertest,:linksubx,:priceextravolume,:priceextratime,:pricecustomvolume,:pricecustomtime,:mainvolume,:maxvolume,:maintime,:maxtime,:status_extend,:subvip,:changeloc,:customvolume,:on_hold_test,:version_panel,:guard_service_ids,:guard_note,:guard_auto_delete_days,:guard_auto_renewals,:guard_version,:shop_features,:rebecca_service_id)");
     $stmt->bindParam(':code_panel', $randomString);
     $stmt->bindParam(':name_panel', $userdata['namepanel'], PDO::PARAM_STR);
     $stmt->bindParam(':sublink', $sublink);
@@ -3093,6 +3111,26 @@ $textday
         nm_writeBroadcastQueueFromJson($userlist); $userlist = null;
         file_put_contents('cronbot/info', $dataunpin);
     } elseif ($typeservice == "sendmessage") {
+        $rxStartLock = @fopen('cronbot/startaction.lock', 'c');
+        if ($rxStartLock && !@flock($rxStartLock, LOCK_EX | LOCK_NB)) {
+            @fclose($rxStartLock);
+            if (!empty($callback_query_id)) {
+                telegram('answerCallbackQuery', [
+                    'callback_query_id' => $callback_query_id,
+                    'text'              => '⏳ عملیات در حال آماده‌سازی است.',
+                    'show_alert'        => false,
+                    'cache_time'        => 0,
+                ]);
+            }
+            return;
+        }
+        $broadcastStatus = function_exists('nm_getBroadcastStatus') ? nm_getBroadcastStatus() : null;
+        if ($broadcastStatus !== null) {
+            if ($rxStartLock) { @flock($rxStartLock, LOCK_UN); @fclose($rxStartLock); }
+            Editmessagetext($from_id, $message_id, nm_buildBroadcastStatusText($broadcastStatus), nm_buildBroadcastStatusKeyboard($broadcastStatus), 'HTML');
+            return;
+        }
+        $statusMessageId = $message_id;
         if ($agent == "all") {
             if ($typeusermessage == "all") {
                 $userslist = json_encode(select("user", "id", "User_Status", "Active", "fetchAll"));
@@ -3130,17 +3168,33 @@ $textday
                 $userslist = json_encode($stmt->fetchAll());
             }
         }
-        $message_id = Editmessagetext($from_id, $message_id, "✅ عملیات آغاز گردید پس از پایان اطلاع رسانی خواهد شد.", $cancelmessage);
+        Editmessagetext($from_id, $statusMessageId, "✅ عملیات آغاز گردید پس از پایان اطلاع رسانی خواهد شد.", $cancelmessage);
+        $rxBuilt = nm_writeBroadcastQueueFromJson($userslist); $userslist = null;
         $data = json_encode(array(
             "id_admin" => $from_id,
             'type' => "sendmessage",
-            "id_message" => $message_id['result']['message_id'],
+            "id_message" => $statusMessageId,
             "message" => $userdata['message'],
             "pingmessage" => $userdata['typepinmessage'],
             "pinduration" => $userdata['pinduration'] ?? 'none',
-            "btnmessage" => $userdata['btntypemessage']
+            "btnmessage" => $userdata['btntypemessage'],
+            "status" => "queued",
+            "stats" => array(
+                "total" => (int) $rxBuilt,
+                "success" => 0,
+                "blocked" => 0,
+                "deleted" => 0,
+                "failed" => 0,
+                "chat_not_found" => 0,
+                "started_at" => time()
+            )
         ));
-        $rxBuilt = nm_writeBroadcastQueueFromJson($userslist); $userslist = null;        file_put_contents('cronbot/info', $data);
+        $rxInfoWritten = file_put_contents('cronbot/info', $data);
+        if ($rxStartLock) { @flock($rxStartLock, LOCK_UN); @fclose($rxStartLock); }
+        $broadcastStatus = ($rxInfoWritten !== false && function_exists('nm_getBroadcastStatus')) ? nm_getBroadcastStatus() : null;
+        if ($broadcastStatus !== null) {
+            Editmessagetext($from_id, $statusMessageId, nm_buildBroadcastStatusText($broadcastStatus), nm_buildBroadcastStatusKeyboard($broadcastStatus), 'HTML');
+        }
     } elseif ($typeservice == "forwardmessage") {
         if ($agent == "all") {
             if ($typeusermessage == "all") {

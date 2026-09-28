@@ -3212,16 +3212,20 @@ try {
 
 
 
-$hookParams = [
-    'url' => "https://$domainhosts/index.php",
-];
-$secretTok = function_exists('getTelegramExpectedSecretToken') ? getTelegramExpectedSecretToken() : '';
-if ($secretTok !== '') {
-    $hookParams['secret_token'] = $secretTok;
-}
-$rxSetHookResp = telegram('setwebhook', $hookParams);
-if (!is_array($rxSetHookResp) || empty($rxSetHookResp['ok'])) {
-    error_log('setwebhook FAILED: ' . json_encode($rxSetHookResp));
+// Railway registers once after migrations, with rate-limit-aware retries.
+// Other callers retain the upstream registration behavior.
+if (!defined('FAOXIMA_SKIP_MIGRATION_WEBHOOK') || !FAOXIMA_SKIP_MIGRATION_WEBHOOK) {
+    $hookParams = [
+        'url' => "https://$domainhosts/index.php",
+    ];
+    $secretTok = function_exists('getTelegramExpectedSecretToken') ? getTelegramExpectedSecretToken() : '';
+    if ($secretTok !== '') {
+        $hookParams['secret_token'] = $secretTok;
+    }
+    $rxSetHookResp = telegram('setwebhook', $hookParams);
+    if (!is_array($rxSetHookResp) || empty($rxSetHookResp['ok'])) {
+        error_log('setwebhook FAILED: ' . json_encode($rxSetHookResp));
+    }
 }
 
 
@@ -3818,4 +3822,3 @@ try {
 } catch (Exception $rxSeedErr) {
     file_put_contents('error_log', '[table.php kb defaults cleanup] ' . $rxSeedErr->getMessage() . "\n", FILE_APPEND);
 }
-

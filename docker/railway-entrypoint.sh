@@ -81,8 +81,8 @@ if [ "${FAOXIMA_AUTO_MIGRATE:-1}" = "1" ]; then
         sleep 2
     done
 
-    echo "[railway] Applying database migrations and configuring Telegram webhook..."
-    php "$APP_DIR/table.php"
+    echo "[railway] Applying database migrations..."
+    php -r 'define("FAOXIMA_SKIP_MIGRATION_WEBHOOK", true); require "table.php";'
 fi
 
 echo "[railway] Verifying Telegram webhook..."

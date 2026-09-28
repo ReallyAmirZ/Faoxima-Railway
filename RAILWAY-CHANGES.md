@@ -1,5 +1,7 @@
 # Railway release — 2026-09-28
 
+Revision r2: prevents duplicate migration/webhook registration on Railway; retries HTTP 429 using Telegram retry_after. See RAILWAY-HOTFIX-429.md.
+
 Upstream: Mmd-Amir/Faoxima v1.1.5, commit 68eccf1981f1bd7f21c8000ad5fff198a0f6c175.
 The complete upstream snapshot is included, not merely the previous package with its version changed.
 

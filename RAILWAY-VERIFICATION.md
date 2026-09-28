@@ -1,5 +1,7 @@
 # Verification — 2026-09-28
 
+r2 also validates nine mocked webhook retry scenarios and the migration webhook guard (normal registration outside the Railway startup, no duplicate inside it).
+
 Source: v1.1.5 / 68eccf1981f1bd7f21c8000ad5fff198a0f6c175.
 
 Passed locally:
